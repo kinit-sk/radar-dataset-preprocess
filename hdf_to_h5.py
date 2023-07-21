@@ -11,27 +11,23 @@ import yaml
 # for returning time elapsed running the script
 tic = time.time()
 
-### config/parameters ### TODO create a config file and map to variables instead of this
-# root directory - at this point we iterate only through one folder with all files (tested on data from 2016-01-11) - TODO
-rootdir = r'C:\Users\marti\kinit\radar-dataset-preprocess\2016-01-11'
+# load config file
+config_file = open("config_hdf_to_h5.yaml", "r")
+config = yaml.safe_load(config_file)
+
+# config/parameters
+# root directory - at this point we iterate only through one folder with all files - TODO
+rootdir = config['rootdir']
 # radar pictures related parameters
-image_capture_interval = 300 # interval between two radar image captures in seconds
-grid_shape = [1, 340, 340] # TODO map this to numbers in code
-grid_limits = ((2000, 2000), (-170000.0, 170000.0), (-170000.0, 170000.0)) # TODO map this to numbers in code + possibly change in config to separate z+y+x fields
-a = 200.0 # parameter a of the Z/R relationship. Standard value according to Marshall-Palmer is a=200
-b = 1.6 # parameter b of the Z/R relationship. Standard value according to Marshall-Palmer is b=1.6
-rainy_pxl_threshold = 0.05 # threshold for determining whether the pixel of radar picture is rainy or not (mm of rain per capture interval)
-rainy_img_threshold = 0.2 # threshold for determining whether the radar picture is rainy or not (percentage of rainy pixels in image)
-# parameters related to training of NN
-input_length = 6 # how many images we want to base our prediction on
-target_length = 6 # how many images we want to forecast into future
-test_size = 0.15 # percentage split of the full dataset used for the test set. Should be a float in the range (0, 1).
-val_size = 0.15 # percentage split of the training set used for the validation set. Should be a float in the range [0, 1).
-batch_size = 8 # how many samples per batch to load in DataLoader
-shuffle = False # whether to shuffle the train/validation indices
-pin_memory = False # whether to copy tensors into CUDA pinned memory. Set it to True if using GPU
-target_timestamp = False # returns target observation timestamp if set to True
-###-------------------###
+image_capture_interval = config['image_capture_interval'] # interval between two radar image captures in seconds
+grid_shape =  tuple(config['grid_shape'])
+grid_limits = tuple([tuple(config['grid_limits'][0]), tuple(config['grid_limits'][1]), tuple(config['grid_limits'][2])])
+a = config['a'] # parameter a of the Z/R relationship. Standard value according to Marshall-Palmer is a=200
+b = config['b'] # parameter b of the Z/R relationship. Standard value according to Marshall-Palmer is b=1.6
+rainy_pxl_threshold = config['rainy_pxl_threshold'] # threshold for determining whether the pixel of radar picture is rainy or not (mm of rain per capture interval)
+rainy_img_threshold = config['rainy_img_threshold'] # threshold for determining whether the radar picture is rainy or not (percentage of rainy pixels in image)
+input_length = config['input_length'] # how many images we want to base our prediction on
+target_length = config['target_length'] # how many images we want to forecast into future
 
 # get paths to all files
 files = glob.glob(rootdir + '/*.hdf', recursive=True)
@@ -48,8 +44,8 @@ for file in files:
     # perform Cartesian mapping, limit to the reflectivity field.
     grid = pyart.map.grid_from_radars(
         (radar,),
-        grid_shape=(1, 336, 336), # TODO change numbers to configureable params
-        grid_limits=((2000, 2000), (-170000.0, 170000.0), (-170000.0, 170000.0)), # TODO change numbers to configureable params
+        grid_shape=grid_shape,
+        grid_limits=grid_limits,
         fields=['reflectivity_horizontal'])
     
     # data is in dBZ (decibel of the reflectivity factor Z) + convert to np.array
@@ -100,7 +96,7 @@ for shift in range(0, target_length + input_length):
     final_image_mask[np.subtract(target_obs_idx, shift)] = True
 
 # empty array for saving chosen precipitation maps
-prec_maps = np.empty((sum(final_image_mask),336,336), dtype=np.single) # TODO change numbers to configureable params - same numbers somewhere in code
+prec_maps = np.empty((sum(final_image_mask),grid_shape[1],grid_shape[2]), dtype=np.single)
 
 # indices of filtered observations
 obs_idx = final_image_mask.nonzero()[0]
@@ -115,8 +111,8 @@ for i in range(sum(final_image_mask)):
     # perform Cartesian mapping, limit to the reflectivity field.
     grid = pyart.map.grid_from_radars(
         (radar,),
-        grid_shape=(1, 336, 336), # TODO change numbers to configureable params - duplicate
-        grid_limits=((2000, 2000), (-170000.0, 170000.0), (-170000.0, 170000.0)), # TODO change numbers to configureable params - duplicate
+        grid_shape=grid_shape,
+        grid_limits=grid_limits,
         fields=['reflectivity_horizontal'])
     
     # data is in dBZ (decibel of the reflectivity factor Z) + convert to np.array
