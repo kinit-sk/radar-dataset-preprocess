@@ -16,8 +16,8 @@ config_file = open("config_hdf_to_h5.yaml", "r")
 config = yaml.safe_load(config_file)
 
 # config/parameters
-# root directory - at this point we iterate only through one folder with all files - TODO
-rootdir = config['rootdir']
+rootdir = config['rootdir'] # root directory - at this point we iterate only through one folder with all files - TODO
+outdir = config['outdir'] # output directory
 # radar pictures related parameters
 image_capture_interval = config['image_capture_interval'] # interval between two radar image captures in seconds
 grid_shape =  tuple(config['grid_shape'])
@@ -101,6 +101,9 @@ prec_maps = np.empty((sum(final_image_mask),grid_shape[1],grid_shape[2]), dtype=
 # indices of filtered observations
 obs_idx = final_image_mask.nonzero()[0]
 
+# shift target indices such that first target is equal to target_length+input_length-1
+shift_target_obs_idx = np.array(list(map(lambda x: np.where(obs_idx == x)[0][0], target_obs_idx)))
+
 for i in range(sum(final_image_mask)):
     # file path
     file = files[final_image_mask.nonzero()[0][i]]
@@ -118,8 +121,11 @@ for i in range(sum(final_image_mask)):
     # data is in dBZ (decibel of the reflectivity factor Z) + convert to np.array
     dBZ = np.array(grid.fields['reflectivity_horizontal']['data'][0])
     
-    # adds to array
-    prec_maps[i,:,:] = dBZ[None,:]
+    # creates and saves new h5 file to outdir
+    # prec_maps[i,:,:] = dBZ[None,:]
+    hf = h5py.File(os.path.join(outdir, file.split('_')[-1].split('.')[0][0:12] + '.h5'), 'w') # TODO outdir as config parameter
+    hf.create_dataset('precipitation_map', data=dBZ, chunks=True)
+    hf.close()
     print(file, f"Appended {i+1}/{len(range(sum(final_image_mask)))} suitable files")
 
 if len(range(sum(final_image_mask))) == 0:
@@ -127,11 +133,9 @@ if len(range(sum(final_image_mask))) == 0:
 else:
     print("Suitable files appended.")
 
-# shift target indices such that first target is equal to target_length+input_length-1
-shift_target_obs_idx = np.array(list(map(lambda x: np.where(obs_idx == x)[0][0], target_obs_idx)))
-
 # save "after cleaning" variables as dict for easier work
-clean_data = {'prec_maps': prec_maps, 'target_idx': shift_target_obs_idx, 'timestamps': timestamps[obs_idx]}
+# clean_data = {'prec_maps': prec_maps, 'target_idx': shift_target_obs_idx, 'timestamps': timestamps[obs_idx]}
+clean_data = {'target_idx': shift_target_obs_idx, 'timestamps': timestamps[obs_idx]}
 
 # time elapsed running the script
 toc = round(time.time() - tic, 2)

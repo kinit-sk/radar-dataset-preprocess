@@ -2,6 +2,7 @@
 ### loading radar map data from hdf format and exporting it as torch DataLoader ###
 
 rootdir: C:\Users\marti\kinit\radar-dataset-preprocess\2016-01-11 # directory of input hdf files  - at this point no subfolders are supported - TODO
+outdir: C:\Users\marti\kinit\radar-dataset-preprocess\output # directory where to save output h5 files
 # radar pictures related parameters
 image_capture_interval: 300 # interval between two radar image captures in seconds
 grid_shape: [1, 340, 340] # TODO map this to numbers in code
