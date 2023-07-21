@@ -5,7 +5,7 @@ rootdir: C:\Users\marti\kinit\radar-dataset-preprocess\2016-01-11 # directory of
 
 # radar pictures related parameters
 image_capture_interval: 300 # interval between two radar image captures in seconds
-grid_shape: [1, 336, 336] # TODO map this to numbers in code
+grid_shape: [1, 340, 340] # TODO map this to numbers in code
 grid_limits: [[2000, 2000], [-170000.0, 170000.0], [-170000.0, 170000.0]] # TODO map this to numbers in code
 a: 200.0 # parameter a of the Z/R relationship Standard value according to Marshall-Palmer is a=200
 b: 1.6 # parameter b of the Z/R relationship Standard value according to Marshall-Palmer is b=1.6
