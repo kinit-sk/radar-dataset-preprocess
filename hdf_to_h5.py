@@ -1,5 +1,6 @@
 import os
 import time
+import logging
 from datetime import datetime, timedelta
 import numpy as np
 import pyart
@@ -37,34 +38,37 @@ ratios = np.array([])
 # timestamps datetime array
 timestamps = np.array([], dtype=np.datetime64)
 
-for file in files:
-    # read raw radar data from hdf file
-    radar = pyart.aux_io.read_odim_h5(file)
-    
-    # perform Cartesian mapping, limit to the reflectivity field.
-    grid = pyart.map.grid_from_radars(
-        (radar,),
-        grid_shape=grid_shape,
-        grid_limits=grid_limits,
-        fields=['reflectivity_horizontal'])
-    
-    # data is in dBZ (decibel of the reflectivity factor Z) + convert to np.array
-    dBZ = np.array(grid.fields['reflectivity_horizontal']['data'][0])
+try:
+    for file in files:
+        # read raw radar data from hdf file
+        radar = pyart.aux_io.read_odim_h5(file)
+        
+        # perform Cartesian mapping, limit to the reflectivity field.
+        grid = pyart.map.grid_from_radars(
+            (radar,),
+            grid_shape=grid_shape,
+            grid_limits=grid_limits,
+            fields=['reflectivity_horizontal'])
+        
+        # data is in dBZ (decibel of the reflectivity factor Z) + convert to np.array
+        dBZ = np.array(grid.fields['reflectivity_horizontal']['data'][0])
 
-    # convert from reflectivity to reflectivity factor Z (units mm^6/h^3)
-    Z = wrl.trafo.idecibel(dBZ)
-    # convert to rainfall intensity (unit: mm/h) using the Marshall-Palmer Z(R) parameters
-    R = wrl.zr.z_to_r(Z, a=a, b=b)
-    # convert to rainfall depth (mm) assuming a rainfall duration of five minutes (i.e. 300 seconds)
-    depth = wrl.trafo.r_to_depth(R, image_capture_interval)
-    # compute ratio of rainy to all pixels in the precipitation map
-    ratio = len(depth[depth > rainy_pxl_threshold]) / depth.size
-    ratios = np.append(ratios, ratio)
-    # timestamp of precipitation map
-    timestamp = np.datetime64(datetime.strptime(file.split('_')[-1].split('.')[0], '%Y%m%d%H%M%S')) # TODO be able to configure dateformat and split symbols to support different file names
-    timestamps = np.append(timestamps, timestamp)
+        # convert from reflectivity to reflectivity factor Z (units mm^6/h^3)
+        Z = wrl.trafo.idecibel(dBZ)
+        # convert to rainfall intensity (unit: mm/h) using the Marshall-Palmer Z(R) parameters
+        R = wrl.zr.z_to_r(Z, a=a, b=b)
+        # convert to rainfall depth (mm) assuming a rainfall duration of five minutes (i.e. 300 seconds)
+        depth = wrl.trafo.r_to_depth(R, image_capture_interval)
+        # compute ratio of rainy to all pixels in the precipitation map
+        ratio = len(depth[depth > rainy_pxl_threshold]) / depth.size
+        ratios = np.append(ratios, ratio)
+        # timestamp of precipitation map
+        timestamp = np.datetime64(datetime.strptime(file.split('_')[-1].split('.')[0], '%Y%m%d%H%M%S')) # TODO be able to configure dateformat and split symbols to support different file names
+        timestamps = np.append(timestamps, timestamp)
 
-    print(file, f"Loaded {len(ratios)}/{len(files)} files")
+        print(file, f"Loaded {len(ratios)}/{len(files)} files")
+except:
+    logging.exception(f"An exception occured while processing {file}.")
 
 print("File load done.")
 
@@ -104,38 +108,39 @@ obs_idx = final_image_mask.nonzero()[0]
 # shift target indices such that first target is equal to target_length+input_length-1
 shift_target_obs_idx = np.array(list(map(lambda x: np.where(obs_idx == x)[0][0], target_obs_idx)))
 
-for i in range(sum(final_image_mask)):
-    # file path
-    file = files[final_image_mask.nonzero()[0][i]]
-    
-    # read raw radar data from hdf file
-    radar = pyart.aux_io.read_odim_h5(file)
-    
-    # perform Cartesian mapping, limit to the reflectivity field.
-    grid = pyart.map.grid_from_radars(
-        (radar,),
-        grid_shape=grid_shape,
-        grid_limits=grid_limits,
-        fields=['reflectivity_horizontal'])
-    
-    # data is in dBZ (decibel of the reflectivity factor Z) + convert to np.array
-    dBZ = np.array(grid.fields['reflectivity_horizontal']['data'][0])
-    
-    # creates and saves new h5 file to outdir
-    # prec_maps[i,:,:] = dBZ[None,:]
-    hf = h5py.File(os.path.join(outdir, file.split('_')[-1].split('.')[0][0:12] + '.h5'), 'w') # TODO outdir as config parameter
-    hf.create_dataset('precipitation_map', data=dBZ, chunks=True)
-    hf.close()
-    print(file, f"Appended {i+1}/{len(range(sum(final_image_mask)))} suitable files")
+try:
+    for i in range(sum(final_image_mask)):
+        # file path
+        file = files[final_image_mask.nonzero()[0][i]]
+        
+        # read raw radar data from hdf file
+        radar = pyart.aux_io.read_odim_h5(file)
+        
+        # perform Cartesian mapping, limit to the reflectivity field.
+        grid = pyart.map.grid_from_radars(
+            (radar,),
+            grid_shape=grid_shape,
+            grid_limits=grid_limits,
+            fields=['reflectivity_horizontal'])
+        
+        # data is in dBZ (decibel of the reflectivity factor Z) + convert to np.array
+        dBZ = np.array(grid.fields['reflectivity_horizontal']['data'][0])
+        
+        # creates and saves new h5 file to outdir
+        hf = h5py.File(os.path.join(outdir, file.split('_')[-1].split('.')[0][0:12] + '.h5'), 'w') # TODO outdir as config parameter
+        hf.create_dataset('precipitation_map', data=dBZ, chunks=True)
+        hf.close()
+        print(file, f"Appended {i+1}/{len(range(sum(final_image_mask)))} suitable files")
+except:
+    logging.exception(f"An exception occured while processing {file}.")
 
 if len(range(sum(final_image_mask))) == 0:
     print("No suitable files found based on provided parameters.")
 else:
     print("Suitable files appended.")
 
-# save "after cleaning" variables as dict for easier work
-# clean_data = {'prec_maps': prec_maps, 'target_idx': shift_target_obs_idx, 'timestamps': timestamps[obs_idx]}
-clean_data = {'target_idx': shift_target_obs_idx, 'timestamps': timestamps[obs_idx]}
+# save meta data for further usage # TODO - export them to h5 metafile
+meta_data = {'target_idx': shift_target_obs_idx, 'timestamps': timestamps[obs_idx]} # TODO add to metafile + change these such that after "except" they only keep the obseravtions before except
 
 # time elapsed running the script
 toc = round(time.time() - tic, 2)
