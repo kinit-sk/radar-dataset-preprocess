@@ -17,8 +17,8 @@ config_file = open("config_hdf_to_h5.yaml", "r")
 config = yaml.safe_load(config_file)
 
 # config/parameters 
-rootdir = config['rootdir'] # root directory - at this point we iterate only through one folder with all files - TODO
-outdir = config['outdir'] # output directory # TODO - save config file to outdir
+rootdir = config['rootdir'] # root directory - at this point we iterate only through one folder with all files - maybe TODO?
+outdir = config['outdir'] # output directory
 # radar pictures related parameters
 image_capture_interval = config['image_capture_interval'] # interval between two radar image captures in seconds
 grid_shape =  tuple(config['grid_shape'])
@@ -63,7 +63,7 @@ try:
         ratio = len(depth[depth > rainy_pxl_threshold]) / depth.size
         ratios = np.append(ratios, ratio)
         # timestamp of precipitation map
-        timestamp = np.datetime64(datetime.strptime(file.split('_')[-1].split('.')[0], '%Y%m%d%H%M%S')) # TODO be able to configure dateformat and split symbols to support different file names
+        timestamp = np.datetime64(datetime.strptime(file.split('_')[-1].split('.')[0], '%Y%m%d%H%M%S'))
         timestamps = np.append(timestamps, timestamp)
 
         print(file, f"Loaded {len(ratios)}/{len(files)} files")
@@ -171,6 +171,9 @@ else:
     mf.create_dataset('timestamps', data=utc_str_arr, chunks=True)
 
     mf.close()
+
+with open(os.path.join(outdir, 'config.yml'), 'w') as outfile:
+    yaml.dump(config, outfile, default_flow_style=False)
 
 # time elapsed running the script
 toc = round(time.time() - tic, 2)
