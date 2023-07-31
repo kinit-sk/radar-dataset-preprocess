@@ -16,9 +16,9 @@ tic = time.time()
 config_file = open("config_hdf_to_h5.yaml", "r")
 config = yaml.safe_load(config_file)
 
-# config/parameters
+# config/parameters 
 rootdir = config['rootdir'] # root directory - at this point we iterate only through one folder with all files - TODO
-outdir = config['outdir'] # output directory
+outdir = config['outdir'] # output directory # TODO - save config file to outdir
 # radar pictures related parameters
 image_capture_interval = config['image_capture_interval'] # interval between two radar image captures in seconds
 grid_shape =  tuple(config['grid_shape'])
@@ -68,9 +68,10 @@ try:
 
         print(file, f"Loaded {len(ratios)}/{len(files)} files")
 except:
-    logging.exception(f"An exception occured while processing {file}.")
-
-print("File load done.")
+    logging.exception(f"An exception occured during loading of files while processing {file}.")
+    print('Loading stopping.')
+else:
+    print("File load successfully done.")
 
 # which of the maps are above a certain threshold
 maps_above_thres = ratios > rainy_img_threshold
@@ -127,20 +128,49 @@ try:
         dBZ = np.array(grid.fields['reflectivity_horizontal']['data'][0])
         
         # creates and saves new h5 file to outdir
-        hf = h5py.File(os.path.join(outdir, file.split('_')[-1].split('.')[0][0:12] + '.h5'), 'w') # TODO outdir as config parameter
+        hf = h5py.File(os.path.join(outdir, file.split('_')[-1].split('.')[0][0:12] + '.h5'), 'w')
         hf.create_dataset('precipitation_map', data=dBZ, chunks=True)
         hf.close()
         print(file, f"Appended {i+1}/{len(range(sum(final_image_mask)))} suitable files")
 except:
-    logging.exception(f"An exception occured while processing {file}.")
+    logging.exception(f"An exception occured during appending of files while processing {file}.")
+    print("Appending stopping.")
 
-if len(range(sum(final_image_mask))) == 0:
-    print("No suitable files found based on provided parameters.")
+    # keep meta data only about currently appended files
+    stop_index = i
+    # save meta data for further usage
+    meta_data = {'target_idx': shift_target_obs_idx, 'timestamps': timestamps[obs_idx]}
+    # subset meta data
+    meta_data['target_idx'] = meta_data['target_idx'][np.where(meta_data['target_idx'] < stop_index)]
+    meta_data['timestamps'] = meta_data['timestamps'][range(stop_index)]
+
+    # write metadata as h5 file
+    mf = h5py.File(os.path.join(outdir, 'metadata.h5'), 'w')
+    # datetime to string with utf8 encoding
+    utc_str_arr = np.array([np.datetime_as_string(n,timezone='UTC').encode('utf-8') for n in meta_data['timestamps']])
+    # save to file
+    mf.create_dataset('target_idx', data=meta_data['target_idx'], chunks=True)
+    mf.create_dataset('timestamps', data=utc_str_arr, chunks=True)
+
+    mf.close()
 else:
-    print("Suitable files appended.")
+    if len(range(sum(final_image_mask))) == 0:
+        print("No suitable files found based on provided parameters.")
+    else:
+        print("Suitable files appended successfully.")
 
-# save meta data for further usage # TODO - export them to h5 metafile
-meta_data = {'target_idx': shift_target_obs_idx, 'timestamps': timestamps[obs_idx]} # TODO add to metafile + change these such that after "except" they only keep the obseravtions before except
+    # save meta data for further usage
+    meta_data = {'target_idx': shift_target_obs_idx, 'timestamps': timestamps[obs_idx]}
+
+    # write metadata as h5 file
+    mf = h5py.File(os.path.join(outdir, 'metadata.h5'), 'w')
+    # datetime to string with utf8 encoding
+    utc_str_arr = np.array([np.datetime_as_string(n,timezone='UTC').encode('utf-8') for n in meta_data['timestamps']])
+    # save to file
+    mf.create_dataset('target_idx', data=meta_data['target_idx'], chunks=True)
+    mf.create_dataset('timestamps', data=utc_str_arr, chunks=True)
+
+    mf.close()
 
 # time elapsed running the script
 toc = round(time.time() - tic, 2)
