@@ -4,7 +4,6 @@ import logging
 from datetime import datetime, timedelta
 import numpy as np
 import pyart
-import wradlib as wrl
 import h5py
 import yaml
 
@@ -17,66 +16,23 @@ def convert_hdf_to_h5(configuration_file: str):
     config = yaml.safe_load(config_file)
 
     # config/parameters 
-    rootdir = config['rootdir'] # root directory
     outdir = config['outdir'] # output directory
     # radar pictures related parameters
     image_capture_interval = config['image_capture_interval'] # interval between two radar image captures in seconds
-    grid_shape =  tuple(config['grid_shape'])
-    grid_limits = tuple([tuple(config['grid_limits'][0]), tuple(config['grid_limits'][1]), tuple(config['grid_limits'][2])])
-    a = config['a'] # parameter a of the Z/R relationship. Standard value according to Marshall-Palmer is a=200
-    b = config['b'] # parameter b of the Z/R relationship. Standard value according to Marshall-Palmer is b=1.6
-    rainy_pxl_threshold = config['rainy_pxl_threshold'] # threshold for determining whether the pixel of radar picture is rainy or not (mm of rain per capture interval)
+    grid_shape =  tuple(config['grid_shape']) # number of points in the grid (z, y, x)
+    grid_limits = tuple([tuple(config['grid_limits'][0]), tuple(config['grid_limits'][1]), tuple(config['grid_limits'][2])]) # minimum and maximum grid location (inclusive) in meters for the z, y, x coordinates
     rainy_img_threshold = config['rainy_img_threshold'] # threshold for determining whether the radar picture is rainy or not (percentage of rainy pixels in image)
     input_length = config['input_length'] # how many images we want to base our prediction on
     target_length = config['target_length'] # how many images we want to forecast into future
 
-    # get paths to all hdf files in rootdir and its subdirectories
-    filepaths = []
-    for dirname, dirs, files in os.walk(rootdir):
-        for filename in files:
-            filename_without_extension, extension = os.path.splitext(filename)
-            if extension == '.hdf':
-                filepaths.append(os.path.join(dirname, filename))
+    # load ratios file from outdir
+    hf = h5py.File(os.path.join(outdir, 'ratios.h5'), 'r')
+    # save them to variables
+    ratios = np.array(hf['ratios'])
+    timestamps = np.array([np.datetime64(datetime.strptime(item.decode(), '%Y-%m-%dT%H:%M:%S.%fZ')) for item in hf['timestamps']])
+    filepaths = [item.decode() for item in hf['filepaths']]
 
-    # ratios array
-    ratios = np.array([])
-    # timestamps datetime array
-    timestamps = np.array([], dtype=np.datetime64)
-
-    try:
-        for file in filepaths:
-            # read raw radar data from hdf file
-            radar = pyart.aux_io.read_odim_h5(file)
-            
-            # perform Cartesian mapping, limit to the reflectivity field.
-            grid = pyart.map.grid_from_radars(
-                (radar,),
-                grid_shape=grid_shape,
-                grid_limits=grid_limits,
-                fields=['reflectivity_horizontal'])
-            
-            # data is in dBZ (decibel of the reflectivity factor Z) + convert to np.array
-            dBZ = np.array(grid.fields['reflectivity_horizontal']['data'][0])
-
-            # convert from reflectivity to reflectivity factor Z (units mm^6/h^3)
-            Z = wrl.trafo.idecibel(dBZ)
-            # convert to rainfall intensity (unit: mm/h) using the Marshall-Palmer Z(R) parameters
-            R = wrl.zr.z_to_r(Z, a=a, b=b)
-            # convert to rainfall depth (mm) assuming a rainfall duration of five minutes (i.e. 300 seconds)
-            depth = wrl.trafo.r_to_depth(R, image_capture_interval)
-            # compute ratio of rainy to all pixels in the precipitation map
-            ratio = len(depth[depth > rainy_pxl_threshold]) / depth.size
-            ratios = np.append(ratios, ratio)
-            # timestamp of precipitation map
-            timestamp = np.datetime64(datetime.strptime(file.split('_')[-1].split('.')[0], '%Y%m%d%H%M%S'))
-            timestamps = np.append(timestamps, timestamp)
-
-            print(file, f"Loaded {len(ratios)}/{len(filepaths)} files")
-    except:
-        logging.exception(f"An exception occured during loading of files while processing {file}.")
-        print('Loading stopped.')
-    else:
-        print("File load successfully done.")
+    hf.close()
 
     # which of the maps are above a certain threshold
     maps_above_thres = ratios > rainy_img_threshold
@@ -104,9 +60,6 @@ def convert_hdf_to_h5(configuration_file: str):
     # choose images that are away from target observation for a set range
     for shift in range(0, target_length + input_length):
         final_image_mask[np.subtract(target_obs_idx, shift)] = True
-
-    # empty array for saving chosen precipitation maps
-    prec_maps = np.empty((sum(final_image_mask),grid_shape[1],grid_shape[2]), dtype=np.single)
 
     # indices of filtered observations
     obs_idx = final_image_mask.nonzero()[0]
@@ -177,7 +130,7 @@ def convert_hdf_to_h5(configuration_file: str):
 
         mf.close()
 
-    with open(os.path.join(outdir, 'config.yml'), 'w') as outfile:
+    with open(os.path.join(outdir, 'config_hdf_to_h5.yaml'), 'w') as outfile:
         yaml.dump(config, outfile, default_flow_style=False)
 
     # time elapsed running the script
@@ -186,4 +139,4 @@ def convert_hdf_to_h5(configuration_file: str):
     print(f"Done. Elapsed {toc} seconds.")
 
 if __name__ == '__main__':
-    convert_hdf_to_h5('config_hdf_to_h5.yaml')
+    convert_hdf_to_h5('config.yaml')
