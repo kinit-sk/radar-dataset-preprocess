@@ -21,6 +21,7 @@ def convert_hdf_to_h5(configuration_file: str):
     image_capture_interval = config['image_capture_interval'] # interval between two radar image captures in seconds
     grid_shape =  tuple(config['grid_shape']) # number of points in the grid (z, y, x)
     grid_limits = tuple([tuple(config['grid_limits'][0]), tuple(config['grid_limits'][1]), tuple(config['grid_limits'][2])]) # minimum and maximum grid location (inclusive) in meters for the z, y, x coordinates
+    aggregate = config['aggregate'] # how to aggregate precipitation from radar maps - CAPPI/CMAX supported (grid parameters must be configured appropriately)
     rainy_img_threshold = config['rainy_img_threshold'] # threshold for determining whether the radar picture is rainy or not (percentage of rainy pixels in image)
     input_length = config['input_length'] # how many images we want to base our prediction on
     target_length = config['target_length'] # how many images we want to forecast into future
@@ -83,7 +84,14 @@ def convert_hdf_to_h5(configuration_file: str):
                 fields=['reflectivity_horizontal'])
             
             # data is in dBZ (decibel of the reflectivity factor Z) + convert to np.array
-            dBZ = np.array(grid.fields['reflectivity_horizontal']['data'][0])
+            # choice based on inputed aggregate method
+            if aggregate == 'CAPPI':
+                dBZ = np.array(grid.fields['reflectivity_horizontal']['data'][0])
+            elif aggregate == 'CMAX':
+                dBZ = np.array(grid.fields['reflectivity_horizontal']['data']).max(axis=0)
+            else:
+                print('Unsupported aggregate method provided in config file, using CMAX instead.')
+                dBZ = np.array(grid.fields['reflectivity_horizontal']['data']).max(axis=0)
             
             # creates and saves new h5 file to outdir
             hf = h5py.File(os.path.join(outdir, file.split('_')[-1].split('.')[0][0:12] + '.h5'), 'w')

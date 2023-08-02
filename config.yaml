@@ -1,12 +1,13 @@
 ### Configuration file for hdf_to_h5.py script ###
 ### loading radar map data from hdf format and exporting suitable candidates based on parameters as h5 files ###
 
-rootdir: C:\Users\marti\kinit\radar-dataset-preprocess\data # directory where input hdf files are located
+rootdir: C:\Users\marti\kinit\radar-dataset-preprocess\data\2016-01-11 # directory where input hdf files are located
 outdir: C:\Users\marti\kinit\radar-dataset-preprocess\output # directory where to save output h5 files
 # radar pictures related parameters
 image_capture_interval: 300 # interval between two radar image captures in seconds
 grid_shape: [1, 340, 340] # number of points in the grid (z, y, x)
 grid_limits: [[2000, 2000], [-170000.0, 170000.0], [-170000.0, 170000.0]] # minimum and maximum grid location (inclusive) in meters for the z, y, x coordinates
+aggregate: CAPPI # how to aggregate precipitation from radar maps - CAPPI/CMAX supported (grid parameters must be configured appropriately)
 a: 200.0 # parameter a of the Z/R relationship Standard value according to Marshall-Palmer is a=200
 b: 1.6 # parameter b of the Z/R relationship Standard value according to Marshall-Palmer is b=1.6
 rainy_pxl_threshold: 0.05 # threshold for determining whether the pixel of radar picture is rainy or not (mm of rain per capture interval)

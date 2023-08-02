@@ -23,6 +23,7 @@ def get_ratios_from_hdf(configuration_file: str):
     image_capture_interval = config['image_capture_interval'] # interval between two radar image captures in seconds
     grid_shape =  tuple(config['grid_shape']) # number of points in the grid (z, y, x)
     grid_limits = tuple([tuple(config['grid_limits'][0]), tuple(config['grid_limits'][1]), tuple(config['grid_limits'][2])]) # minimum and maximum grid location (inclusive) in meters for the z, y, x coordinates
+    aggregate = config['aggregate'] # how to aggregate precipitation from radar maps - CAPPI/CMAX supported (grid parameters must be configured appropriately)
     a = config['a'] # parameter a of the Z/R relationship. Standard value according to Marshall-Palmer is a=200
     b = config['b'] # parameter b of the Z/R relationship. Standard value according to Marshall-Palmer is b=1.6
     rainy_pxl_threshold = config['rainy_pxl_threshold'] # threshold for determining whether the pixel of radar picture is rainy or not (mm of rain per capture interval)
@@ -50,7 +51,14 @@ def get_ratios_from_hdf(configuration_file: str):
                         fields=['reflectivity_horizontal'])
                     
                     # data is in dBZ (decibel of the reflectivity factor Z) + convert to np.array
-                    dBZ = np.array(grid.fields['reflectivity_horizontal']['data'][0])
+                    # choice based on inputed aggregate method
+                    if aggregate == 'CAPPI':
+                        dBZ = np.array(grid.fields['reflectivity_horizontal']['data'][0])
+                    elif aggregate == 'CMAX':
+                        dBZ = np.array(grid.fields['reflectivity_horizontal']['data']).max(axis=0)
+                    else:
+                        print('Unsupported aggregate method provided in config file, using CMAX instead.')
+                        dBZ = np.array(grid.fields['reflectivity_horizontal']['data']).max(axis=0)
 
                     # convert from reflectivity to reflectivity factor Z (units mm^6/h^3)
                     Z = wrl.trafo.idecibel(dBZ)
@@ -105,7 +113,14 @@ def get_ratios_from_hdf(configuration_file: str):
                     fields=['reflectivity_horizontal'])
                 
                 # data is in dBZ (decibel of the reflectivity factor Z) + convert to np.array
-                dBZ = np.array(grid.fields['reflectivity_horizontal']['data'][0])
+                # choice based on inputed aggregate method
+                if aggregate == 'CAPPI':
+                    dBZ = np.array(grid.fields['reflectivity_horizontal']['data'][0])
+                elif aggregate == 'CMAX':
+                    dBZ = np.array(grid.fields['reflectivity_horizontal']['data']).max(axis=0)
+                else:
+                    print('Unsupported aggregate method provided in config file, using CMAX instead.')
+                    dBZ = np.array(grid.fields['reflectivity_horizontal']['data']).max(axis=0)
 
                 # convert from reflectivity to reflectivity factor Z (units mm^6/h^3)
                 Z = wrl.trafo.idecibel(dBZ)
@@ -138,8 +153,8 @@ def get_ratios_from_hdf(configuration_file: str):
         finally:
             hf.close()
 
-    with open(os.path.join(outdir, 'config_get_ratios_from_hdf.yaml'), 'w') as outfile:
-        yaml.dump(config, outfile, default_flow_style=False)
+        with open(os.path.join(outdir, 'config_get_ratios_from_hdf.yaml'), 'w') as outfile:
+            yaml.dump(config, outfile, default_flow_style=False)
 
     # time elapsed running the script
     toc = round(time.time() - tic, 2)
