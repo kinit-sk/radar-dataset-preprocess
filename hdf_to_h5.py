@@ -52,7 +52,7 @@ def convert_hdf_to_h5(configuration_file: str):
                     i += 1
         if i >= len(timestamps):
                 break
-        
+               
     # change timestamps type to np.datetime64
     timestamps = np.array([np.datetime64(datetime.strptime(item, '%Y-%m-%dT%H:%M:%S.%fZ')) for item in timestamps])
 
@@ -60,9 +60,6 @@ def convert_hdf_to_h5(configuration_file: str):
     maps_above_thres = ratios > rainy_img_threshold
 
     # indices of target observations
-    target_obs_idx = maps_above_thres.nonzero()[0]
-
-    # datetimes of target observations
     target_obs_idx = maps_above_thres.nonzero()[0]
 
     # check if between target and lead observation are not missing observations
@@ -89,10 +86,47 @@ def convert_hdf_to_h5(configuration_file: str):
     # shift target indices such that first target is equal to target_length+input_length-1
     shift_target_obs_idx = np.array(list(map(lambda x: np.where(obs_idx == x)[0][0], target_obs_idx)))
 
+    # check if metadata.h5 file exists in outdir
+    # if it does, start appending from last appended file
+    if os.path.exists(os.path.join(outdir, 'metadata.h5')):
+        print('metadata.h5 exists, appending only files not present in outdir.')
+        existing_files = []
+        i = 0
+
+        for dirname, dirs, files in os.walk(outdir):
+            for filename in files:
+                filename_without_extension, extension = os.path.splitext(filename)
+                if extension == '.h5' and filename_without_extension[0] == '2':
+                    existing_files.append(filename_without_extension)
+        
+        for filename in filepaths:
+            filename_without_extension, extension = os.path.splitext(filename)
+            if extension == '.hdf':
+                if filename_without_extension.split("_")[-1][0:12] in existing_files:
+                    final_image_mask[i] = False
+            i += 1
+
+        # indices of filtered observations
+        obs_idx = final_image_mask.nonzero()[0]
+    else:
+        print('metadata.h5 not found, starting from scratch.')
+        # save meta data for further usage
+        meta_data = {'target_idx': shift_target_obs_idx, 'timestamps': timestamps[obs_idx]}
+
+        # write metadata as h5 file
+        mf = h5py.File(os.path.join(outdir, 'metadata.h5'), 'w')
+        # datetime to string with utf8 encoding
+        utc_str_arr = np.array([np.datetime_as_string(n,timezone='UTC').encode('utf-8') for n in meta_data['timestamps']])
+        # save to file
+        mf.create_dataset('target_idx', data=meta_data['target_idx'], chunks=True)
+        mf.create_dataset('timestamps', data=utc_str_arr, chunks=True)
+
+        mf.close()
+ 
     try:
         for i in range(sum(final_image_mask)):
             # file path
-            file = filepaths[final_image_mask.nonzero()[0][i]]
+            file = filepaths[obs_idx[i]]
             
             # read raw radar data from hdf file
             radar = pyart.aux_io.read_odim_h5(file)
@@ -122,42 +156,13 @@ def convert_hdf_to_h5(configuration_file: str):
     except:
         logging.exception(f"An exception occured during appending of files while processing {file}.")
         print("Appending stopped.")
-
-        # keep meta data only about currently appended files
-        stop_index = i
-        # save meta data for further usage
-        meta_data = {'target_idx': shift_target_obs_idx, 'timestamps': timestamps[obs_idx]}
-        # subset meta data
-        meta_data['target_idx'] = meta_data['target_idx'][np.where(meta_data['target_idx'] < stop_index)]
-        meta_data['timestamps'] = meta_data['timestamps'][range(stop_index)]
-
-        # write metadata as h5 file
-        mf = h5py.File(os.path.join(outdir, 'metadata.h5'), 'w')
-        # datetime to string with utf8 encoding
-        utc_str_arr = np.array([np.datetime_as_string(n,timezone='UTC').encode('utf-8') for n in meta_data['timestamps']])
-        # save to file
-        mf.create_dataset('target_idx', data=meta_data['target_idx'], chunks=True)
-        mf.create_dataset('timestamps', data=utc_str_arr, chunks=True)
-
-        mf.close()
     else:
         if len(range(sum(final_image_mask))) == 0:
             print("No suitable files found based on provided parameters.")
         else:
             print("Suitable files appended successfully.")
-
-        # save meta data for further usage
-        meta_data = {'target_idx': shift_target_obs_idx, 'timestamps': timestamps[obs_idx]}
-
-        # write metadata as h5 file
-        mf = h5py.File(os.path.join(outdir, 'metadata.h5'), 'w')
-        # datetime to string with utf8 encoding
-        utc_str_arr = np.array([np.datetime_as_string(n,timezone='UTC').encode('utf-8') for n in meta_data['timestamps']])
-        # save to file
-        mf.create_dataset('target_idx', data=meta_data['target_idx'], chunks=True)
-        mf.create_dataset('timestamps', data=utc_str_arr, chunks=True)
-
-        mf.close()
+    finally:
+        hf.close()
 
     with open(os.path.join(outdir, 'config_hdf_to_h5.yaml'), 'w') as outfile:
         yaml.dump(config, outfile, default_flow_style=False)
