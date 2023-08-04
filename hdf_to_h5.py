@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+import re
 from datetime import datetime, timedelta
 import numpy as np
 import pyart
@@ -17,6 +18,7 @@ def convert_hdf_to_h5(configuration_file: str):
 
     # config/parameters 
     outdir = config['outdir'] # output directory
+    rootdir = config['rootdir'] # root directory
     # radar pictures related parameters
     image_capture_interval = config['image_capture_interval'] # interval between two radar image captures in seconds
     grid_shape =  tuple(config['grid_shape']) # number of points in the grid (z, y, x)
@@ -30,10 +32,29 @@ def convert_hdf_to_h5(configuration_file: str):
     hf = h5py.File(os.path.join(outdir, 'ratios.h5'), 'r')
     # save them to variables
     ratios = np.array(hf['ratios'])
-    timestamps = np.array([np.datetime64(datetime.strptime(item.decode(), '%Y-%m-%dT%H:%M:%S.%fZ')) for item in hf['timestamps']])
-    filepaths = [item.decode() for item in hf['filepaths']]
-
+    timestamps = [item.decode() for item in hf['timestamps']]
+    
     hf.close()
+
+    # empty filepaths initialization
+    filepaths = []
+
+    # finding filename in rootdir based on timestamp in ratio file
+    i = 0
+    for dirname, dirs, files in os.walk(rootdir):
+        for filename in files:
+            filename_without_extension, extension = os.path.splitext(filename)
+            if extension == '.hdf':
+                timestamp = re.split('[-T:.]', timestamps[i])
+                timestamp = ''.join(timestamp[:-1])
+                if filename_without_extension.split("_")[-1][0:14] == timestamp:
+                    filepaths.append(os.path.join(dirname, filename))
+                    i += 1
+        if i >= len(timestamps):
+                break
+        
+    # change timestamps type to np.datetime64
+    timestamps = np.array([np.datetime64(datetime.strptime(item, '%Y-%m-%dT%H:%M:%S.%fZ')) for item in timestamps])
 
     # which of the maps are above a certain threshold
     maps_above_thres = ratios > rainy_img_threshold

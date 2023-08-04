@@ -1,8 +1,8 @@
 ### Configuration file for hdf_to_h5.py script ###
 ### loading radar map data from hdf format and exporting suitable candidates based on parameters as h5 files ###
 
-rootdir: C:\Users\marti\kinit\radar-dataset-preprocess\data\2016-01-11 # directory where input hdf files are located
-outdir: C:\Users\marti\kinit\radar-dataset-preprocess\output # directory where to save output h5 files
+rootdir: C:\Users\marti\kinit\SOFTEC\radary # directory where input hdf files are located
+outdir: C:\Users\marti\kinit\radar-dataset-preprocess\full_output # directory where to save output h5 files
 # radar pictures related parameters
 image_capture_interval: 300 # interval between two radar image captures in seconds
 grid_shape: [1, 340, 340] # number of points in the grid (z, y, x)
