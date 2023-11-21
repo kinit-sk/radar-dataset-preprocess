@@ -1,0 +1,11 @@
+input_path: C:\Users\marti\kinit\radar-dataset-preprocess-02\radary_days_test # path where raw odim files are located
+output_path: C:\Users\marti\kinit\radar-dataset-preprocess-02\vystup_test # path where to write output h5 files
+log_path: C:\Users\marti\kinit\radar-dataset-preprocess-02\vystup_test # path where to write logs
+radar_codes: ["kb", "kh", "mj", "sl"]
+products: ["dBZ", "dBZv", "KDP", "RhoHV", "W", "ZDR"] # product codes
+#products: ["dBZ", "dBZv", "KDP", "RhoHV", "V", "Vv", "W", "ZDR"] # product codes with velocity included
+rainy_radar_code: "mj" # on which radar to base on selection of rainy days
+rain_threshold: 
+  rate: 0.5 # rainrate in mmh - above this value = rainy, below = not rainy
+  fraction: 0.8 # criterion which we base on selection of rainy days - fraction of rainy pixels per image in [0,1] - keep images above, discard images below
+nworkers: 4 # no of workers for parallel processing
