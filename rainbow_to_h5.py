@@ -895,11 +895,18 @@ def main(conf, restarted):
                             with open(inc_ts_path, 'a') as tf:
                                 tf.write(datetime_str + ' ' + product + '\n')
                     
-                    # dict has to be nonempty for it to make sense to append the task
-                    if selected_files_dict:
+                    # dict has to be the same size as number of products for it to make sense to append the task
+                    if len(selected_files_dict) == len(conf.products):
                         if not output_subpath.exists():
                             output_subpath.mkdir(parents=True)
                         res.append(dask.delayed(convert_rnbw_to_h5)(conf, selected_files_dict, outfile, datetime_str, rain_threshold))
+                    else:
+                        if not inc_ts_path.exists():
+                            with open(inc_ts_path, 'w') as tf:
+                                pass
+                            
+                        with open(inc_ts_path, 'a') as tf:
+                            tf.write(datetime_str + ' ' + product + '\n')
     
     logging.info(f"Creating {len(res)} h5 files!")
     

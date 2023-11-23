@@ -8,4 +8,6 @@ rainy_radar_code: "mj" # on which radar to base on selection of rainy days
 rain_threshold: 
   rate: 0.5 # rainrate in mmh - above this value = rainy, below = not rainy
   fraction: 0.8 # criterion which we base on selection of rainy days - fraction of rainy pixels per image in [0,1] - keep images above, discard images below
+obs_interval: 5 # how many minutes is between observations
+check_rain_interval: 120 # check rain threshold each how many minutes?
 nworkers: 4 # no of workers for parallel processing
