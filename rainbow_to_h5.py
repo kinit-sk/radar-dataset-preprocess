@@ -13,7 +13,7 @@ from dask.diagnostics import ProgressBar
 from pathlib import Path
 from addict import Dict
 import yaml
-import wradlib.clutter as clutter
+import wradlib.classify as classify
 from wradlib.trafo import decibel
 from wradlib.zr import r_to_z
 from collections import defaultdict
@@ -25,7 +25,7 @@ from pyart.core.radar import Radar
 sys.stdout = sys.__stdout__
 
 
-
+# TODO - move functions to utils folder
 def load_config(file):
     """
     Load configuration from YAML file.
@@ -49,6 +49,19 @@ def convert_uint_to_float(data, datamin, datamax, depth, mask_val=0):
     ma_data = (ma_data - 1) / (2 ** depth - 2) * (datamax - datamin) + datamin
     return ma_data
 
+def load_timestamps(file: Path):
+    """
+    Load timestamps written to txt file.
+    
+    """
+    array = []
+    with open(file) as f:
+            f = f.readlines()
+
+    for line in f:
+        array.append(line.split(' ')[0])
+    
+    return array
 
 def convert_float_to_uint(data, datamin, datamax, depth, target_type):
     """
@@ -482,7 +495,7 @@ def read_rainbow_wrl_custom(
 
         if i == 0:
             volume_start_epoch = sweep_start_epoch + 0.0
-            start_time = datetime.datetime.utcfromtimestamp(volume_start_epoch)
+            start_time = datetime.datetime.fromtimestamp(volume_start_epoch, tz=datetime.timezone.utc)
 
         # data
         fdata[ssri[i] : seri[i] + 1, :] = _get_data(
@@ -716,13 +729,14 @@ def convert_rnbw_to_h5(conf, all_files, outfiles, datetimes_str, rain_thres):
 
     """
     
+    # check preselected observation if it contains enough rain
     dbz_radar = None
     
     for file in all_files[0]['dBZ']:
         if conf.rainy_radar_code in file:
             dbz_radar = read_rainbow_wrl_custom(file)
     
-    # perform Cartesian mapping of Radar class, limit to the reflectivity field.
+    # perform Cartesian mapping of Radar class, limit to the reflectivity field. - TODO - remake so it takes all radars
     grid = pyart.map.grid_from_radars(
     (dbz_radar,),
     grid_shape=(1, 340, 340),
@@ -733,11 +747,13 @@ def convert_rnbw_to_h5(conf, all_files, outfiles, datetimes_str, rain_thres):
     data = grid.fields[RAINBOW_FIELD_NAMES['dBZ']]["data"][0]
             
     # remove clutter from image
-    clmap = clutter.filter_gabella(data, rm_nans=False, cartesian=True)
+    
+    clmap = classify.filter_gabella(data, rm_nans=False, cartesian=True)
     data[np.nonzero(clmap)] = np.nan
-    clmap = clutter.filter_gabella(data, rm_nans=False, cartesian=True)
+    clmap = classify.filter_gabella(data, rm_nans=False, cartesian=True)
     data[np.nonzero(clmap)] = np.nan
     
+    # ratio by which we compare selected radar obs to threshold
     rainy_pxls_ratio = np.sum(data >= rain_thres.rate)/np.prod(data.shape)
     
     if rainy_pxls_ratio >= rain_thres.fraction:
@@ -771,9 +787,9 @@ def convert_rnbw_to_h5(conf, all_files, outfiles, datetimes_str, rain_thres):
 
                 # remove clutter from image
                 if product in ['dBZ', 'dBZv']:
-                    clmap = clutter.filter_gabella(data, rm_nans=False, cartesian=True)
+                    clmap = classify.filter_gabella(data, rm_nans=False, cartesian=True)
                     data[np.nonzero(clmap)] = np.nan
-                    clmap = clutter.filter_gabella(data, rm_nans=False, cartesian=True)
+                    clmap = classify.filter_gabella(data, rm_nans=False, cartesian=True)
                     data[np.nonzero(clmap)] = np.nan
                 
                 # convert radar to uint
@@ -814,22 +830,18 @@ def convert_rnbw_to_h5(conf, all_files, outfiles, datetimes_str, rain_thres):
                                 )
         
         complete_path = Path(conf.log_path) / 'completed_timestamps.txt'
-        if not complete_path.exists():
-            with open(complete_path, 'w') as cf:
-                pass
+        complete_path.touch()
             
-        with open(complete_path, 'a') as cf:
-            for datetime_str in datetimes_str:
+        for datetime_str in datetimes_str:
+            with open(complete_path, 'a') as cf:
                 cf.write(datetime_str + ' ' + '\n')
             
     else:
         nonrainy_path = Path(conf.log_path) / 'nonrainy_timestamps.txt'
-        if not nonrainy_path.exists():
-            with open(nonrainy_path, 'w') as nf:
-                pass
+        nonrainy_path.touch()
             
-        with open(nonrainy_path, 'a') as nf:
-            for datetime_str in datetimes_str:
+        for datetime_str in datetimes_str:
+            with open(nonrainy_path, 'a') as nf:
                 nf.write(datetime_str + ' ' + '\n')
         
     del data
@@ -856,6 +868,7 @@ def main(conf, restarted):
                         level=logging.INFO,
                         datefmt='%Y-%m-%d %H:%M:%S',
                         )
+    logging.info('Starting script...')
     
     # date format in file - TODO - maybe part of config
     date_format = '%Y%m%d%H%M'
@@ -875,24 +888,26 @@ def main(conf, restarted):
     nonrainy_timestamps = []
     if restarted:
         # get incomplete timestamps
-        logging.info(f'Restarted run will use incomplete timestamps from file: {inc_ts_path}.')
+        if inc_ts_path.exists():
+            logging.info(f'Restarted run will use incomplete timestamps from file: {inc_ts_path}.')
+            incomplete_timestamps = load_timestamps(inc_ts_path)
+            incomplete_timestamps = np.unique(incomplete_timestamps)
+        else:
+            logging.info(f'Did not find incomplete timestamps file at {inc_ts_path}. Did it ever exist or is it just moved?')
             
-        with open(inc_ts_path) as tf:
-            tf = tf.readlines()
-
-        for line in tf:
-            incomplete_timestamps.append(line.split(' ')[0])
-
-        incomplete_timestamps = np.unique(incomplete_timestamps)
-        
         # get complete timestamps
-        logging.info(f'Restarted run will use completed timestamps from file: {com_ts_path}.')
-        
-        with open(com_ts_path) as cf:
-            cf = cf.readlines()
-
-        for line in cf:
-            complete_timestamps.append(line.split(' ')[0])
+        if com_ts_path.exists():
+            logging.info(f'Restarted run will use completed timestamps from file: {com_ts_path}.') 
+            complete_timestamps = load_timestamps(com_ts_path)
+        else:
+            logging.info(f'Did not find complete timestamps file at {com_ts_path}. Did it ever exist or is it just moved?')
+            
+        # get nonrainy timestamps
+        if non_ts_path.exists():
+            logging.info(f'Restarted run will use nonrainy timestamps from file: {non_ts_path}.')
+            nonrainy_timestamps = load_timestamps(non_ts_path)
+        else:
+            logging.info(f'Did not find nonrainy timestamps file at {non_ts_path}. Did it ever exist or is it just moved?')
         
         # delete observations from output that didn't close properly
         for path_object in output_path.rglob('*'):
@@ -924,7 +939,7 @@ def main(conf, restarted):
                 input_subpath = input_path / date_str
                 
                 # append to dask only timestamps that arent already transformed or discarded from data
-                if not outfile.exists() and datetime_str not in incomplete_timestamps:
+                if datetime_str not in incomplete_timestamps and datetime_str not in complete_timestamps and datetime_str not in nonrainy_timestamps:
                     selected_files_dict = defaultdict(list)
                     
                     # find paths to selected timestamp and given product
@@ -942,10 +957,7 @@ def main(conf, restarted):
                         if len(selected_files) == len(conf.radar_codes):
                             selected_files_dict[product] = selected_files
                         else:
-                            if not inc_ts_path.exists():
-                                with open(inc_ts_path, 'w') as tf:
-                                    pass
-                            
+                            inc_ts_path.touch()
                             with open(inc_ts_path, 'a') as tf:
                                 tf.write(datetime_str + ' ' + product + '\n')
                     
@@ -957,10 +969,7 @@ def main(conf, restarted):
                         res_outfile.append(outfile)
                         res_datetime.append(datetime)
                     else:
-                        if not inc_ts_path.exists():
-                            with open(inc_ts_path, 'w') as tf:
-                                pass
-                            
+                        inc_ts_path.touch()
                         with open(inc_ts_path, 'a') as tf:
                             tf.write(datetime_str + ' ' + product + '\n')
                             
@@ -969,12 +978,7 @@ def main(conf, restarted):
     incomplete_timestamps = []
 
     if inc_ts_path.exists():
-        with open(inc_ts_path) as tf:
-                tf = tf.readlines()
-
-        for line in tf:
-            incomplete_timestamps.append(line.split(' ')[0])
-
+        incomplete_timestamps = load_timestamps(inc_ts_path)
         incomplete_timestamps = np.unique(incomplete_timestamps)
     
     final_res_files = None
@@ -997,18 +1001,36 @@ def main(conf, restarted):
                 datetime = start_datetime + dt.timedelta(minutes=lag)
                 temp_datetimes = []
                 incomplete_bool = False
+                complete_bool = False
+                nonrainy_bool = False
                 
                 # get only intervals that are full of observations
                 for i in range(0, jump, interval):
                     temp_datetime = datetime - dt.timedelta(minutes=i)
                     temp_datetime_str = temp_datetime.strftime(date_format)
-                    if temp_datetime_str in incomplete_timestamps or temp_datetime_str in complete_timestamps:
+                    
+                    if temp_datetime_str in complete_timestamps:
+                        complete_bool = True
+                    
+                    elif temp_datetime_str in nonrainy_timestamps:
+                        nonrainy_bool = True
+                        
+                    elif temp_datetime_str in incomplete_timestamps:
                         incomplete_bool = True
+                        temp_datetimes.append(temp_datetime)
                     else:
                         temp_datetimes.append(temp_datetime)
                 
                 # get indices of datetimes so we can append other stuff
-                if not incomplete_bool:
+                if incomplete_bool:
+                    inc_ts_path.touch()     
+                    with open(inc_ts_path, 'a') as tf:
+                        for temp_datetime in temp_datetimes:
+                            temp_datetime_str = temp_datetime.strftime(date_format)
+                            if temp_datetime_str not in incomplete_timestamps:
+                                tf.write(temp_datetime_str + ' ' + 'not_full_interval' + '\n')
+
+                if not incomplete_bool and not complete_bool and not nonrainy_bool:
                     idx = []
                     for temp_datetime in temp_datetimes:
                         for i in range(len(res_datetime)):
@@ -1023,7 +1045,7 @@ def main(conf, restarted):
     
     logging.info(f'Append done.')
     
-    logging.info(f"Creating {len(res)} dask tasks!")
+    logging.info(f"Creating {len(res)} dask tasks! {int(jump/interval)} observations per task.")
     
     with ProgressBar(minimum = 10, dt = 60):
         scheduler = "processes" if conf.nworkers > 1 else "single-threaded"
