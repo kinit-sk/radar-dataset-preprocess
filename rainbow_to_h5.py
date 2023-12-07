@@ -1,4 +1,3 @@
-#import os
 import io
 import sys
 import gc
@@ -6,13 +5,10 @@ import logging
 import argparse
 import datetime as dt
 import numpy as np
-#import numpy.ma as ma
 import h5py
 import dask
 from dask.diagnostics import ProgressBar
 from pathlib import Path
-#from addict import Dict
-#import yaml
 import wradlib.classify as classify
 from wradlib.trafo import decibel
 from wradlib.zr import r_to_z
@@ -22,7 +18,6 @@ from utils import *
 text_trap = io.StringIO()
 sys.stdout = text_trap
 import pyart
-#from pyart.core.radar import Radar
 sys.stdout = sys.__stdout__
 
 
@@ -104,68 +99,69 @@ def convert_rnbw_to_h5(conf, all_files, outfiles, datetimes_str, rain_thres):
 
     """
     
-    # check preselected observation if it contains enough rain
-    dbz_radar = None
+    # check the last observation if it contains enough rain
+    dbz_radars = []
     
     for file in all_files[0]['dBZ']:
-        if conf.rainy_radar_code in file:
-            dbz_radar = read_rainbow_wrl_custom(file)
+        dbz_radars.append(read_rainbow_wrl_custom(file))
+        
+    dbz_radars = tuple(dbz_radars)
     
-    # perform Cartesian mapping of Radar class, limit to the reflectivity field. - TODO - remake so it takes all radars
+    # perform Cartesian mapping of Radar class, limit to the reflectivity field.
     grid = pyart.map.grid_from_radars(
-    (dbz_radar,),
-    grid_shape=(1, 340, 340),
-    grid_limits=((2000, 2000), (-170000.0, 170000.0), (-170000.0, 170000.0)),
+    (dbz_radars),
+    grid_shape=(1, 517, 755),
+    grid_limits=((2000, 2000), (-517073/2, 517073/2), (-(789412+720621)/4, (789412+720621)/4)), # CAPPI 2km, limits based on size by SHMU - TODO - add this params to config
+    grid_origin=((46.05+50.7)/2,(13.6+23.8)/2),
     fields=[RAINBOW_FIELD_NAMES['dBZ']])
     
     # to np.array from Grid object
-    data = grid.fields[RAINBOW_FIELD_NAMES['dBZ']]["data"][0]
+    dbz_data = grid.fields[RAINBOW_FIELD_NAMES['dBZ']]["data"][0]
             
     # remove clutter from image
-    
-    clmap = classify.filter_gabella(data, rm_nans=False, cartesian=True)
-    data[np.nonzero(clmap)] = np.nan
-    clmap = classify.filter_gabella(data, rm_nans=False, cartesian=True)
-    data[np.nonzero(clmap)] = np.nan
+    clmap = classify.filter_gabella(dbz_data, rm_nans=False, cartesian=True)
+    dbz_data[np.nonzero(clmap)] = np.nan
+    clmap = classify.filter_gabella(dbz_data, rm_nans=False, cartesian=True)
+    dbz_data[np.nonzero(clmap)] = np.nan
     
     # ratio by which we compare selected radar obs to threshold
-    rainy_pxls_ratio = np.sum(data >= rain_thres.rate)/np.prod(data.shape)
+    rainy_pxls_ratio = np.sum(dbz_data >= rain_thres.rate)/np.prod(dbz_data.shape)
     
     if rainy_pxls_ratio >= rain_thres.fraction:
         for i, files in enumerate(all_files):
             for product in files.keys():
-                radars = []
-                # read selected radar images as Radar class to 1 tuple                    
-                for file in files[product]:
-                    if i == 0 and product == 'dBZ' and conf.rainy_radar_code in file:
-                        radars.append(dbz_radar)
-                    else:
+                if i == 0 and product == 'dBZ':
+                    data = dbz_data
+                else:
+                    radars = []
+                    # read selected radar images as Radar class to 1 tuple                    
+                    for file in files[product]:
                         radars.append(read_rainbow_wrl_custom(file))
-                radars = tuple(radars)
-                
-                # perform Cartesian mapping of Radar class, limit to the reflectivity field.
-                grid = pyart.map.grid_from_radars(
-                    (radars),
-                    grid_shape=(1, 517, 755),
-                    grid_limits=((2000, 2000), (-517073/2, 517073/2), (-(789412+720621)/4, (789412+720621)/4)), # CAPPI 2km, limits based on size by SHMU - TODO - add this params to config
-                    grid_origin=((46.05+50.7)/2,(13.6+23.8)/2),
-                    fields=[RAINBOW_FIELD_NAMES[product]],
-                )
+                    radars = tuple(radars)
+                    
+                    # perform Cartesian mapping of Radar class, limit to the reflectivity field.
+                    grid = pyart.map.grid_from_radars(
+                        (radars),
+                        grid_shape=(1, 517, 755),
+                        grid_limits=((2000, 2000), (-517073/2, 517073/2), (-(789412+720621)/4, (789412+720621)/4)), # CAPPI 2km, limits based on size by SHMU - TODO - add this params to config
+                        grid_origin=((46.05+50.7)/2,(13.6+23.8)/2),
+                        fields=[RAINBOW_FIELD_NAMES[product]],
+                    )
 
-                # to np.array from Grid object
-                data = grid.fields[RAINBOW_FIELD_NAMES[product]]["data"][0]
+                    # to np.array from Grid object
+                    data = grid.fields[RAINBOW_FIELD_NAMES[product]]["data"][0]
+
+                    # remove clutter from image
+                    if product in ['dBZ', 'dBZv']:
+                        clmap = classify.filter_gabella(data, rm_nans=False, cartesian=True)
+                        data[np.nonzero(clmap)] = np.nan
+                        clmap = classify.filter_gabella(data, rm_nans=False, cartesian=True)
+                        data[np.nonzero(clmap)] = np.nan
 
                 # save parameters for compression
                 datamin = RAINBOW_DATAMINS[product]
                 datamax = RAINBOW_DATAMAXES[product]
                 datadepth = 8 #TODO customizable parameter
-
-                # remove clutter from image
-                if product in ['dBZ', 'dBZv']:
-                    clmap = classify.filter_gabella(data, rm_nans=False, cartesian=True)
-                    data[np.nonzero(clmap)] = np.nan
-                    clmap = classify.filter_gabella(data, rm_nans=False, cartesian=True)
-                    data[np.nonzero(clmap)] = np.nan
                 
                 # convert radar to uint
                 data = convert_float_to_uint(
@@ -219,8 +215,6 @@ def convert_rnbw_to_h5(conf, all_files, outfiles, datetimes_str, rain_thres):
             with open(nonrainy_path, 'a') as nf:
                 nf.write(datetime_str + ' ' + '\n')
         
-    del data
-    del grid
     gc.collect()
                     
         
