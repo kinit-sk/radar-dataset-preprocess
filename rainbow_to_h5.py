@@ -418,7 +418,7 @@ def main(conf, restarted):
     
     with ProgressBar(minimum = 10, dt = 60):
         scheduler = "processes" if conf.nworkers > 1 else "single-threaded"
-        res = dask.compute(*res, scheduler=scheduler)
+        res = dask.compute(*res, num_workers=conf.nworkers, scheduler=scheduler)
                 
     logging.info(f"All done!")
 
