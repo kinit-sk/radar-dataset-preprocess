@@ -4,6 +4,7 @@ from pathlib import Path
 from addict import Dict
 import yaml
 import h5py
+import tarfile
 
 def load_config(file):
     """
@@ -88,3 +89,32 @@ def write_image(group: h5py.Group, ds_name: str, data: np.ndarray, what_attrs: d
     ds_what = group.require_group("what")
     for k, val in what_attrs.items():
         ds_what.attrs[k] = val
+        
+def get_members(tf, subfolder_name="YYYY-MM-DD/"):
+    """
+    Yields members of given tar file.
+    
+    """
+    l = len(subfolder_name)
+    for member in tf.getmembers():
+        if member.path.endswith(".vol"):
+            member.path = member.path[l:]
+            yield member
+            
+def directory_is_empty(directory) -> bool:
+    """
+    Check if directory of Path type is empty.
+    
+    """
+    return not any(directory.iterdir())
+
+def rmtree(top):
+    """
+    Remove all files from directory of Path type.
+    
+    """
+    for root, dirs, files in top.walk(top_down=False):
+        for name in files:
+            (root / name).unlink()
+        for name in dirs:
+            (root / name).rmdir()

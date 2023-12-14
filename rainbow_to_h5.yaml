@@ -1,4 +1,5 @@
-input_path: C:\Users\marti\kinit\radar-dataset-preprocess-02\radary # path where raw odim files are located
+input_path: C:\Users\marti\kinit\radar_tarfiles # path where tarballs with raw odim files are located
+temp_path: C:\Users\marti\kinit\radar-dataset-preprocess-02\temp_radars # path where to temporarily unpack tar files
 output_path: C:\Users\marti\kinit\radar-dataset-preprocess-02\vystup_test2 # path where to write output h5 files
 log_path: C:\Users\marti\kinit\radar-dataset-preprocess-02\vystup_test2 # path where to write logs
 radar_codes: ["kb", "kh", "mj", "sl"]

@@ -9,6 +9,7 @@ import h5py
 import dask
 from dask.diagnostics import ProgressBar
 from pathlib import Path
+from threading import RLock
 import wradlib.classify as classify
 from wradlib.trafo import decibel
 from wradlib.zr import r_to_z
@@ -113,10 +114,13 @@ def convert_rnbw_to_h5(conf, all_files, outfiles, datetimes_str, rain_thres):
     grid_shape=(1, 517, 755),
     grid_limits=((2000, 2000), (-517073/2, 517073/2), (-(789412+720621)/4, (789412+720621)/4)), # CAPPI 2km, limits based on size by SHMU - TODO - add this params to config
     grid_origin=((46.05+50.7)/2,(13.6+23.8)/2),
-    fields=[RAINBOW_FIELD_NAMES['dBZ']])
+    fields=[RAINBOW_FIELD_NAMES['dBZ']],
+    )
     
     # to np.array from Grid object
     dbz_data = grid.fields[RAINBOW_FIELD_NAMES['dBZ']]["data"][0]
+    del grid
+    gc.collect()
             
     # remove clutter from image
     clmap = classify.filter_gabella(dbz_data, rm_nans=False, cartesian=True)
@@ -150,6 +154,8 @@ def convert_rnbw_to_h5(conf, all_files, outfiles, datetimes_str, rain_thres):
 
                     # to np.array from Grid object
                     data = grid.fields[RAINBOW_FIELD_NAMES[product]]["data"][0]
+                    del grid
+                    gc.collect()
 
                     # remove clutter from image
                     if product in ['dBZ', 'dBZv']:
@@ -202,18 +208,20 @@ def convert_rnbw_to_h5(conf, all_files, outfiles, datetimes_str, rain_thres):
         
         complete_path = Path(conf.log_path) / 'completed_timestamps.txt'
         complete_path.touch()
-            
-        for datetime_str in datetimes_str:
-            with open(complete_path, 'a') as cf:
-                cf.write(datetime_str + ' ' + '\n')
+        
+        with RLock():
+            with open(complete_path, 'a') as cf:    
+                for datetime_str in datetimes_str:
+                    cf.write(datetime_str + ' ' + '\n')
             
     else:
         nonrainy_path = Path(conf.log_path) / 'nonrainy_timestamps.txt'
         nonrainy_path.touch()
             
-        for datetime_str in datetimes_str:
-            with open(nonrainy_path, 'a') as nf:
-                nf.write(datetime_str + ' ' + '\n')
+        with RLock():
+            with open(nonrainy_path, 'a') as nf:    
+                for datetime_str in datetimes_str:
+                    nf.write(datetime_str + ' ' + '\n')
         
     gc.collect()
                     
@@ -221,10 +229,12 @@ def convert_rnbw_to_h5(conf, all_files, outfiles, datetimes_str, rain_thres):
 def main(conf, restarted):
     # setup paths
     input_path = Path(conf.input_path)
+    temp_path = Path(conf.temp_path)
     output_path = Path(conf.output_path)
     inc_ts_path = Path(conf.log_path) / 'incomplete_timestamps.txt'
     com_ts_path = Path(conf.log_path) / 'completed_timestamps.txt'
     non_ts_path = Path(conf.log_path) / 'nonrainy_timestamps.txt'
+    com_days_path = Path(conf.log_path) / 'completed_days.txt'
     
     # create outputdir if doesnt exist
     if not output_path.exists():
@@ -255,6 +265,9 @@ def main(conf, restarted):
     incomplete_timestamps = []
     complete_timestamps = []
     nonrainy_timestamps = []
+    complete_days = []
+    date_str = None
+    
     if restarted:
         # get incomplete timestamps
         if inc_ts_path.exists():
@@ -277,150 +290,190 @@ def main(conf, restarted):
             nonrainy_timestamps = load_timestamps(non_ts_path)
         else:
             logging.info(f'Did not find nonrainy timestamps file at {non_ts_path}. Did it ever exist or is it just moved?')
+            
+        if com_days_path.exists():
+            logging.info(f'Restarted run will use complete days from file: {com_days_path}.')
+            complete_days = load_timestamps(com_days_path)
+        else:
+            logging.info(f'Did not find complete days file at {com_days_path}. Did it ever exist or is it just moved?')
         
         # delete observations from output that didn't close properly
         for path_object in output_path.rglob('*'):
             if path_object.is_file() and path_object.suffix == '.h5':
-                    if path_object.stem not in complete_timestamps:
-                        logging.info(f'{path_object} not found in completed_timestamps.txt. Deleting...')
+                    if path_object.stem not in complete_timestamps and path_object.stem[8:] not in complete_days:
+                        logging.info(f'{path_object} not found in completed_timestamps.txt or completed_days.txt. Deleting...')
                             
                         path_object.unlink()
                         logging.info(f'Deleted.')
-    
-    res_files = []
-    res_outfile = []
-    res_datetime = []
-    
-    logging.info('Starting check of observations suitability.')
-    
-    # iterate over subdirectories for each day
-    for path_object in input_path.glob('*'):
-        if path_object.is_dir():
-            date_str = str(path_object)[-8:]
-            start_datetime = dt.datetime.strptime(date_str, '%Y%m%d')
-            # iterate over one day
-            for lag in range(0, 24*60, interval):
-                datetime = start_datetime + dt.timedelta(minutes=lag)
-                datetime_str = datetime.strftime(date_format)
-                # outfile path
-                output_subpath = output_path / date_str
-                outfile = output_subpath / (datetime_str + '.h5')
-                input_subpath = input_path / date_str
-                
-                # append to dask only timestamps that arent already transformed or discarded from data
-                if datetime_str not in incomplete_timestamps and datetime_str not in complete_timestamps and datetime_str not in nonrainy_timestamps:
-                    selected_files_dict = defaultdict(list)
-                    
-                    # find paths to selected timestamp and given product
-                    for product in conf.products:
-                        selected_files = []
 
-                        # get paths to 4 radar station images of 1 product and append to one array
-                        for radar_code in conf.radar_codes:
-                            for subpath_object in Path(input_subpath / radar_code).glob('*'):
-                                filepath = str(subpath_object)
-                                if datetime_str in filepath and filepath.endswith(product+'.vol'):
-                                    selected_files.append(filepath)
-                        
-                        # check if all radars have observation for the day
-                        if len(selected_files) == len(conf.radar_codes):
-                            selected_files_dict[product] = selected_files
-                        else:
-                            inc_ts_path.touch()
-                            with open(inc_ts_path, 'a') as tf:
-                                tf.write(datetime_str + ' ' + product + '\n')
+        # check if temp directory is empty, if not, get its date
+        if not directory_is_empty(temp_path):
+            for item in temp_path.iterdir():
+                date_str = item.stem[:8]
+    
+    # create iterator from tar files
+    iterator = [i for i in input_path.rglob('*.tar')]
+              
+    if date_str is not None:
+        iterator.insert(0, date_str)
+    
+    for j, tarfile_path in enumerate(iterator):
+        # if selected tarfile is not completed, unpack him with all the other radars for the given day
+        if j==0 and date_str is not None:
+            logging.info(f'{date_str} already unpacked.')
+            date_str = tarfile_path
+        else:
+            if tarfile_path.stem[:8] not in complete_days:
+                date_str = tarfile_path.stem[:8]
+                
+                logging.info(f'Unpacking tar for {date_str}...')
+                for radar_code in conf.radar_codes:
+                    tarfile_path = input_path / (date_str + '_rb5vol_' + radar_code + '.tar')
+                    with tarfile.open(tarfile_path, 'r') as tf:
+                        temp_out_path = temp_path / date_str / radar_code
+                        temp_out_path.mkdir(parents=True, exist_ok=True)
+                        os.chdir(temp_out_path)
+                        tf.extractall(members=get_members(tf))
+                
+                logging.info(f'{date_str} unpacked successfully.')
+    
+        res_files = []
+        res_outfile = []
+        res_datetime = []
+        
+        logging.info('Starting check of observations suitability.')
+        
+        # iterate over subdirectories for each day
+        start_datetime = dt.datetime.strptime(date_str, '%Y%m%d')
+        # iterate over one day
+        for lag in range(0, 24*60, interval):
+            datetime = start_datetime + dt.timedelta(minutes=lag)
+            datetime_str = datetime.strftime(date_format)
+            # outfile path
+            output_subpath = output_path / date_str
+            outfile = output_subpath / (datetime_str + '.h5')
+            temp_subpath = temp_path / date_str
+            
+            # append to dask only timestamps that arent already transformed or discarded from data
+            if datetime_str not in incomplete_timestamps and datetime_str not in complete_timestamps and datetime_str not in nonrainy_timestamps:
+                selected_files_dict = defaultdict(list)
+                
+                # find paths to selected timestamp and given product
+                for product in conf.products:
+                    selected_files = []
+
+                    # get paths to 4 radar station images of 1 product and append to one array
+                    for radar_code in conf.radar_codes:
+                        for subpath_object in Path(temp_subpath / radar_code).glob('*'):
+                            filepath = str(subpath_object)
+                            if datetime_str in filepath and filepath.endswith(product+'.vol'):
+                                selected_files.append(filepath)
                     
-                    # dict has to be the same size as number of products for it to make sense to append the task
-                    if len(selected_files_dict) == len(conf.products):
-                        if not output_subpath.exists():
-                            output_subpath.mkdir(parents=True)
-                        res_files.append(selected_files_dict)
-                        res_outfile.append(outfile)
-                        res_datetime.append(datetime)
+                    # check if all radars have observation for the day
+                    if len(selected_files) == len(conf.radar_codes):
+                        selected_files_dict[product] = selected_files
                     else:
                         inc_ts_path.touch()
                         with open(inc_ts_path, 'a') as tf:
                             tf.write(datetime_str + ' ' + product + '\n')
-                            
-    logging.info('Check done.')
-    
-    incomplete_timestamps = []
-
-    if inc_ts_path.exists():
-        incomplete_timestamps = load_timestamps(inc_ts_path)
-        incomplete_timestamps = np.unique(incomplete_timestamps)
-    
-    final_res_files = None
-    final_res_outfile = None
-    final_res_datetime = None
-    res = []
-    
-    logging.info(f'Appending suitable tasks to dask...')
-    
-    # iterate only over larger intervals (in rainbow_to_h5 function it will be checked whether or not these will be appended to final dataset based on rain threshold)
-    for path_object in input_path.glob('*'):
-        if path_object.is_dir():
-            
-            # initialize start and end datetimes
-            date_str = str(path_object)[-8:]
-            start_datetime = dt.datetime.strptime(date_str, '%Y%m%d') + dt.timedelta(minutes=jump) - dt.timedelta(minutes=interval)
-            end_datetime = dt.datetime.strptime(date_str, '%Y%m%d') + dt.timedelta(hours=24) - dt.timedelta(minutes=interval)
-            
-            for lag in range(0, end_datetime.hour * 60 + end_datetime.minute + 1, jump):
-                datetime = start_datetime + dt.timedelta(minutes=lag)
-                temp_datetimes = []
-                incomplete_bool = False
-                complete_bool = False
-                nonrainy_bool = False
                 
-                # get only intervals that are full of observations
-                for i in range(0, jump, interval):
-                    temp_datetime = datetime - dt.timedelta(minutes=i)
-                    temp_datetime_str = temp_datetime.strftime(date_format)
-                    
-                    if temp_datetime_str in complete_timestamps:
-                        complete_bool = True
-                    
-                    elif temp_datetime_str in nonrainy_timestamps:
-                        nonrainy_bool = True
-                        
-                    elif temp_datetime_str in incomplete_timestamps:
-                        incomplete_bool = True
-                        temp_datetimes.append(temp_datetime)
-                    else:
-                        temp_datetimes.append(temp_datetime)
-                
-                # get indices of datetimes so we can append other stuff
-                if incomplete_bool:
-                    inc_ts_path.touch()     
+                # dict has to be the same size as number of products for it to make sense to append the task
+                if len(selected_files_dict) == len(conf.products):
+                    if not output_subpath.exists():
+                        output_subpath.mkdir(parents=True)
+                    res_files.append(selected_files_dict)
+                    res_outfile.append(outfile)
+                    res_datetime.append(datetime)
+                else:
+                    inc_ts_path.touch()
                     with open(inc_ts_path, 'a') as tf:
-                        for temp_datetime in temp_datetimes:
-                            temp_datetime_str = temp_datetime.strftime(date_format)
-                            if temp_datetime_str not in incomplete_timestamps:
-                                tf.write(temp_datetime_str + ' ' + 'not_full_interval' + '\n')
+                        tf.write(datetime_str + ' ' + product + '\n')
+                                
+        logging.info('Check done.')
+        
+        incomplete_timestamps = []
 
-                if not incomplete_bool and not complete_bool and not nonrainy_bool:
-                    idx = []
-                    for temp_datetime in temp_datetimes:
-                        for i in range(len(res_datetime)):
-                            if res_datetime[i] == temp_datetime:
-                                idx.append(i)
-                    
-                    # append to dask
-                    final_res_files = [res_files[i] for i in idx]
-                    final_res_outfile = [res_outfile[i] for i in idx]
-                    final_res_datetimes_str = [temp_datetime.strftime(date_format) for temp_datetime in temp_datetimes]
-                    res.append(dask.delayed(convert_rnbw_to_h5)(conf, final_res_files, final_res_outfile, final_res_datetimes_str, rain_threshold))
-    
-    logging.info(f'Append done.')
-    
-    logging.info(f"Creating {len(res)} dask tasks! {int(jump/interval)} observations per task.")
-    
-    with ProgressBar(minimum = 10, dt = 60):
-        scheduler = "processes" if conf.nworkers > 1 else "single-threaded"
-        res = dask.compute(*res, num_workers=conf.nworkers, scheduler=scheduler)
+        if inc_ts_path.exists():
+            incomplete_timestamps = load_timestamps(inc_ts_path)
+            incomplete_timestamps = np.unique(incomplete_timestamps)
+        
+        final_res_files = None
+        final_res_outfile = None
+        final_res_datetime = None
+        res = []
+        
+        logging.info(f'Appending suitable tasks to dask...')
+        
+        # iterate only over larger intervals (in rainbow_to_h5 function it will be checked whether or not these will be appended to final dataset based on rain threshold)      
+        # initialize start and end datetimes
+        start_datetime = dt.datetime.strptime(date_str, '%Y%m%d') + dt.timedelta(minutes=jump) - dt.timedelta(minutes=interval)
+        end_datetime = dt.datetime.strptime(date_str, '%Y%m%d') + dt.timedelta(hours=24) - dt.timedelta(minutes=interval)
+        
+        for lag in range(0, end_datetime.hour * 60 + end_datetime.minute + 1, jump):
+            datetime = start_datetime + dt.timedelta(minutes=lag)
+            temp_datetimes = []
+            incomplete_bool = False
+            complete_bool = False
+            nonrainy_bool = False
+            
+            # get only intervals that are full of observations
+            for i in range(0, jump, interval):
+                temp_datetime = datetime - dt.timedelta(minutes=i)
+                temp_datetime_str = temp_datetime.strftime(date_format)
                 
-    logging.info(f"All done!")
+                if temp_datetime_str in complete_timestamps:
+                    complete_bool = True
+                
+                elif temp_datetime_str in nonrainy_timestamps:
+                    nonrainy_bool = True
+                    
+                elif temp_datetime_str in incomplete_timestamps:
+                    incomplete_bool = True
+                    temp_datetimes.append(temp_datetime)
+                else:
+                    temp_datetimes.append(temp_datetime)
+            
+            # get indices of datetimes so we can append other stuff
+            if incomplete_bool:
+                inc_ts_path.touch()     
+                with open(inc_ts_path, 'a') as tf:
+                    for temp_datetime in temp_datetimes:
+                        temp_datetime_str = temp_datetime.strftime(date_format)
+                        if temp_datetime_str not in incomplete_timestamps:
+                            tf.write(temp_datetime_str + ' ' + 'not_full_interval' + '\n')
+
+            if not incomplete_bool and not complete_bool and not nonrainy_bool:
+                idx = []
+                for temp_datetime in temp_datetimes:
+                    for i in range(len(res_datetime)):
+                        if res_datetime[i] == temp_datetime:
+                            idx.append(i)
+                
+                # append to dask
+                final_res_files = [res_files[i] for i in idx]
+                final_res_outfile = [res_outfile[i] for i in idx]
+                final_res_datetimes_str = [temp_datetime.strftime(date_format) for temp_datetime in temp_datetimes]
+                res.append(dask.delayed(convert_rnbw_to_h5)(conf, final_res_files, final_res_outfile, final_res_datetimes_str, rain_threshold))
+        
+        logging.info('Append done.')
+        
+        logging.info(f"Creating {len(res)} dask tasks! {int(jump/interval)} observations per task.")
+        
+        with ProgressBar(minimum = 10, dt = 60):
+            scheduler = "processes" if conf.nworkers > 1 else "single-threaded"
+            res = dask.compute(*res, num_workers=conf.nworkers, scheduler=scheduler)
+        
+        # delete temporary radar files from temp_path 
+        rmtree(temp_path)
+        
+        # write date_str as complete day
+        com_days_path.touch()
+        with open(com_days_path, 'a') as f:
+                f.write(date_str + ' ' + '\n')
+        
+        logging.info(f'Done transforming data from {date_str}.')
+               
+    logging.info("Everything done!")
 
 
 if __name__ == '__main__':
