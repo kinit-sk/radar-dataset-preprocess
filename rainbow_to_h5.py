@@ -205,6 +205,9 @@ def convert_rnbw_to_h5(conf, all_files, outfiles, datetimes_str, rain_thres):
                                 data=data,
                                 what_attrs=what_attrs,
                                 )
+                    
+                del data
+                gc.collect()
         
         complete_path = Path(conf.log_path) / 'completed_timestamps.txt'
         complete_path.touch()
