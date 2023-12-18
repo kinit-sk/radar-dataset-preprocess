@@ -125,8 +125,6 @@ def convert_rnbw_to_h5(conf, all_files, outfiles, datetimes_str, rain_thres):
     # remove clutter from image
     clmap = classify.filter_gabella(dbz_data, rm_nans=False, cartesian=True)
     dbz_data[np.nonzero(clmap)] = np.nan
-    clmap = classify.filter_gabella(dbz_data, rm_nans=False, cartesian=True)
-    dbz_data[np.nonzero(clmap)] = np.nan
     
     # ratio by which we compare selected radar obs to threshold
     rainy_pxls_ratio = np.sum(dbz_data >= rain_thres.rate)/np.prod(dbz_data.shape)
@@ -159,8 +157,6 @@ def convert_rnbw_to_h5(conf, all_files, outfiles, datetimes_str, rain_thres):
 
                     # remove clutter from image
                     if product in ['dBZ', 'dBZv']:
-                        clmap = classify.filter_gabella(data, rm_nans=False, cartesian=True)
-                        data[np.nonzero(clmap)] = np.nan
                         clmap = classify.filter_gabella(data, rm_nans=False, cartesian=True)
                         data[np.nonzero(clmap)] = np.nan
 
