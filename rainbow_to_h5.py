@@ -293,7 +293,6 @@ def main(conf, restarted):
         if com_days_path.exists():
             logging.info(f'Restarted run will use complete days from file: {com_days_path}.')
             complete_days = load_timestamps(com_days_path)
-            complete_days = np.unique(complete_days)
         else:
             logging.info(f'Did not find complete days file at {com_days_path}. Did it ever exist or is it just moved?')
         
