@@ -5,6 +5,7 @@ from addict import Dict
 import yaml
 import h5py
 import tarfile
+import os
 
 def load_config(file):
     """
@@ -100,6 +101,17 @@ def get_members(tf, subfolder_name="YYYY-MM-DD/"):
         if member.path.endswith(".vol"):
             member.path = member.path[l:]
             yield member
+            
+def extract_all(tf, out_dir):
+    """
+    Extracts all members of given tar file.
+    
+    """
+    for item in tf:
+        if item.name.endswith('.vol'):
+            item.name = os.path.basename(item.name)
+            tf.extract(item, str(out_dir))
+    
             
 def directory_is_empty(directory) -> bool:
     """
