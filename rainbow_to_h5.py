@@ -1,4 +1,3 @@
-#import os
 import io
 import sys
 import gc
@@ -6,13 +5,11 @@ import logging
 import argparse
 import datetime as dt
 import numpy as np
-#import numpy.ma as ma
 import h5py
 import dask
 from dask.diagnostics import ProgressBar
 from pathlib import Path
-#from addict import Dict
-#import yaml
+from threading import RLock
 import wradlib.classify as classify
 from wradlib.trafo import decibel
 from wradlib.zr import r_to_z
@@ -22,7 +19,6 @@ from utils import *
 text_trap = io.StringIO()
 sys.stdout = text_trap
 import pyart
-#from pyart.core.radar import Radar
 sys.stdout = sys.__stdout__
 
 
@@ -104,68 +100,70 @@ def convert_rnbw_to_h5(conf, all_files, outfiles, datetimes_str, rain_thres):
 
     """
     
-    # check preselected observation if it contains enough rain
-    dbz_radar = None
+    # check the last observation if it contains enough rain
+    dbz_radars = []
     
     for file in all_files[0]['dBZ']:
-        if conf.rainy_radar_code in file:
-            dbz_radar = read_rainbow_wrl_custom(file)
+        dbz_radars.append(read_rainbow_wrl_custom(file))
+        
+    dbz_radars = tuple(dbz_radars)
     
-    # perform Cartesian mapping of Radar class, limit to the reflectivity field. - TODO - remake so it takes all radars
+    # perform Cartesian mapping of Radar class, limit to the reflectivity field.
     grid = pyart.map.grid_from_radars(
-    (dbz_radar,),
-    grid_shape=(1, 340, 340),
-    grid_limits=((2000, 2000), (-170000.0, 170000.0), (-170000.0, 170000.0)),
-    fields=[RAINBOW_FIELD_NAMES['dBZ']])
+    (dbz_radars),
+    grid_shape=(1, 517, 755),
+    grid_limits=((2000, 2000), (-517073/2, 517073/2), (-(789412+720621)/4, (789412+720621)/4)), # CAPPI 2km, limits based on size by SHMU - TODO - add this params to config
+    grid_origin=((46.05+50.7)/2,(13.6+23.8)/2),
+    fields=[RAINBOW_FIELD_NAMES['dBZ']],
+    )
     
     # to np.array from Grid object
-    data = grid.fields[RAINBOW_FIELD_NAMES['dBZ']]["data"][0]
+    dbz_data = grid.fields[RAINBOW_FIELD_NAMES['dBZ']]["data"][0]
+    del grid
+    gc.collect()
             
     # remove clutter from image
-    
-    clmap = classify.filter_gabella(data, rm_nans=False, cartesian=True)
-    data[np.nonzero(clmap)] = np.nan
-    clmap = classify.filter_gabella(data, rm_nans=False, cartesian=True)
-    data[np.nonzero(clmap)] = np.nan
+    clmap = classify.filter_gabella(dbz_data, rm_nans=False, cartesian=True)
+    dbz_data[np.nonzero(clmap)] = np.nan
     
     # ratio by which we compare selected radar obs to threshold
-    rainy_pxls_ratio = np.sum(data >= rain_thres.rate)/np.prod(data.shape)
+    rainy_pxls_ratio = np.sum(dbz_data >= rain_thres.rate)/np.prod(dbz_data.shape)
     
     if rainy_pxls_ratio >= rain_thres.fraction:
         for i, files in enumerate(all_files):
             for product in files.keys():
-                radars = []
-                # read selected radar images as Radar class to 1 tuple                    
-                for file in files[product]:
-                    if i == 0 and product == 'dBZ' and conf.rainy_radar_code in file:
-                        radars.append(dbz_radar)
-                    else:
+                if i == 0 and product == 'dBZ':
+                    data = dbz_data
+                else:
+                    radars = []
+                    # read selected radar images as Radar class to 1 tuple                    
+                    for file in files[product]:
                         radars.append(read_rainbow_wrl_custom(file))
-                radars = tuple(radars)
-                
-                # perform Cartesian mapping of Radar class, limit to the reflectivity field.
-                grid = pyart.map.grid_from_radars(
-                    (radars),
-                    grid_shape=(1, 517, 755),
-                    grid_limits=((2000, 2000), (-517073/2, 517073/2), (-(789412+720621)/4, (789412+720621)/4)), # CAPPI 2km, limits based on size by SHMU - TODO - add this params to config
-                    grid_origin=((46.05+50.7)/2,(13.6+23.8)/2),
-                    fields=[RAINBOW_FIELD_NAMES[product]],
-                )
+                    radars = tuple(radars)
+                    
+                    # perform Cartesian mapping of Radar class, limit to the reflectivity field.
+                    grid = pyart.map.grid_from_radars(
+                        (radars),
+                        grid_shape=(1, 517, 755),
+                        grid_limits=((2000, 2000), (-517073/2, 517073/2), (-(789412+720621)/4, (789412+720621)/4)), # CAPPI 2km, limits based on size by SHMU - TODO - add this params to config
+                        grid_origin=((46.05+50.7)/2,(13.6+23.8)/2),
+                        fields=[RAINBOW_FIELD_NAMES[product]],
+                    )
 
-                # to np.array from Grid object
-                data = grid.fields[RAINBOW_FIELD_NAMES[product]]["data"][0]
+                    # to np.array from Grid object
+                    data = grid.fields[RAINBOW_FIELD_NAMES[product]]["data"][0]
+                    del grid
+                    gc.collect()
+
+                    # remove clutter from image
+                    if product in ['dBZ', 'dBZv']:
+                        clmap = classify.filter_gabella(data, rm_nans=False, cartesian=True)
+                        data[np.nonzero(clmap)] = np.nan
 
                 # save parameters for compression
                 datamin = RAINBOW_DATAMINS[product]
                 datamax = RAINBOW_DATAMAXES[product]
                 datadepth = 8 #TODO customizable parameter
-
-                # remove clutter from image
-                if product in ['dBZ', 'dBZv']:
-                    clmap = classify.filter_gabella(data, rm_nans=False, cartesian=True)
-                    data[np.nonzero(clmap)] = np.nan
-                    clmap = classify.filter_gabella(data, rm_nans=False, cartesian=True)
-                    data[np.nonzero(clmap)] = np.nan
                 
                 # convert radar to uint
                 data = convert_float_to_uint(
@@ -203,34 +201,39 @@ def convert_rnbw_to_h5(conf, all_files, outfiles, datetimes_str, rain_thres):
                                 data=data,
                                 what_attrs=what_attrs,
                                 )
+                    
+                del data
+                gc.collect()
         
         complete_path = Path(conf.log_path) / 'completed_timestamps.txt'
         complete_path.touch()
-            
-        for datetime_str in datetimes_str:
-            with open(complete_path, 'a') as cf:
-                cf.write(datetime_str + ' ' + '\n')
+        
+        with RLock():
+            with open(complete_path, 'a') as cf:    
+                for datetime_str in datetimes_str:
+                    cf.write(datetime_str + ' ' + '\n')
             
     else:
         nonrainy_path = Path(conf.log_path) / 'nonrainy_timestamps.txt'
         nonrainy_path.touch()
             
-        for datetime_str in datetimes_str:
-            with open(nonrainy_path, 'a') as nf:
-                nf.write(datetime_str + ' ' + '\n')
+        with RLock():
+            with open(nonrainy_path, 'a') as nf:    
+                for datetime_str in datetimes_str:
+                    nf.write(datetime_str + ' ' + '\n')
         
-    del data
-    del grid
     gc.collect()
                     
         
 def main(conf, restarted):
     # setup paths
     input_path = Path(conf.input_path)
+    temp_path = Path(conf.temp_path)
     output_path = Path(conf.output_path)
     inc_ts_path = Path(conf.log_path) / 'incomplete_timestamps.txt'
     com_ts_path = Path(conf.log_path) / 'completed_timestamps.txt'
     non_ts_path = Path(conf.log_path) / 'nonrainy_timestamps.txt'
+    com_days_path = Path(conf.log_path) / 'completed_days.txt'
     
     # create outputdir if doesnt exist
     if not output_path.exists():
@@ -261,6 +264,9 @@ def main(conf, restarted):
     incomplete_timestamps = []
     complete_timestamps = []
     nonrainy_timestamps = []
+    complete_days = []
+    date_str = None
+    
     if restarted:
         # get incomplete timestamps
         if inc_ts_path.exists():
@@ -283,26 +289,60 @@ def main(conf, restarted):
             nonrainy_timestamps = load_timestamps(non_ts_path)
         else:
             logging.info(f'Did not find nonrainy timestamps file at {non_ts_path}. Did it ever exist or is it just moved?')
+            
+        if com_days_path.exists():
+            logging.info(f'Restarted run will use complete days from file: {com_days_path}.')
+            complete_days = load_timestamps(com_days_path)
+        else:
+            logging.info(f'Did not find complete days file at {com_days_path}. Did it ever exist or is it just moved?')
         
         # delete observations from output that didn't close properly
         for path_object in output_path.rglob('*'):
             if path_object.is_file() and path_object.suffix == '.h5':
-                    if path_object.stem not in complete_timestamps:
-                        logging.info(f'{path_object} not found in completed_timestamps.txt. Deleting...')
+                    if path_object.stem not in complete_timestamps and path_object.stem[8:] not in complete_days:
+                        logging.info(f'{path_object} not found in completed_timestamps.txt or completed_days.txt. Deleting...')
                             
                         path_object.unlink()
                         logging.info(f'Deleted.')
+
+        # check if temp directory is empty, if not, get its date
+        if not directory_is_empty(temp_path):
+            for item in temp_path.iterdir():
+                date_str = item.stem[:8]
     
-    res_files = []
-    res_outfile = []
-    res_datetime = []
+    # create iterator from tar files
+    iterator = [i for i in input_path.rglob('*.tar')]
+              
+    if date_str is not None:
+        iterator.insert(0, date_str)
     
-    logging.info('Starting check of observations suitability.')
-    
-    # iterate over subdirectories for each day
-    for path_object in input_path.glob('*'):
-        if path_object.is_dir():
-            date_str = str(path_object)[-8:]
+    for j, tarfile_path in enumerate(iterator):
+        # if selected tarfile is not completed, unpack him with all the other radars for the given day
+        if j==0 and date_str is not None:
+            logging.info(f'{date_str} already unpacked.')
+            date_str = tarfile_path
+        else:
+            if tarfile_path.stem[:8] not in complete_days:
+                date_str = tarfile_path.stem[:8]
+                
+                logging.info(f'Unpacking tar for {date_str}...')
+                for radar_code in conf.radar_codes:
+                    tarfile_path = input_path / (date_str + '_rb5vol_' + radar_code + '.tar')
+                    with tarfile.open(tarfile_path, 'r') as tf:
+                        temp_out_path = temp_path / date_str / radar_code
+                        temp_out_path.mkdir(parents=True, exist_ok=True)
+                        extract_all(tf, temp_out_path)
+                
+                logging.info(f'{date_str} unpacked successfully.')
+
+        if j==0 or tarfile_path.stem[:8] not in complete_days:
+            res_files = []
+            res_outfile = []
+            res_datetime = []
+            
+            logging.info('Starting check of observations suitability.')
+            
+            # iterate over subdirectories for each day
             start_datetime = dt.datetime.strptime(date_str, '%Y%m%d')
             # iterate over one day
             for lag in range(0, 24*60, interval):
@@ -311,7 +351,7 @@ def main(conf, restarted):
                 # outfile path
                 output_subpath = output_path / date_str
                 outfile = output_subpath / (datetime_str + '.h5')
-                input_subpath = input_path / date_str
+                temp_subpath = temp_path / date_str
                 
                 # append to dask only timestamps that arent already transformed or discarded from data
                 if datetime_str not in incomplete_timestamps and datetime_str not in complete_timestamps and datetime_str not in nonrainy_timestamps:
@@ -323,7 +363,7 @@ def main(conf, restarted):
 
                         # get paths to 4 radar station images of 1 product and append to one array
                         for radar_code in conf.radar_codes:
-                            for subpath_object in Path(input_subpath / radar_code).glob('*'):
+                            for subpath_object in Path(temp_subpath / radar_code).glob('*'):
                                 filepath = str(subpath_object)
                                 if datetime_str in filepath and filepath.endswith(product+'.vol'):
                                     selected_files.append(filepath)
@@ -347,28 +387,24 @@ def main(conf, restarted):
                         inc_ts_path.touch()
                         with open(inc_ts_path, 'a') as tf:
                             tf.write(datetime_str + ' ' + product + '\n')
-                            
-    logging.info('Check done.')
-    
-    incomplete_timestamps = []
-
-    if inc_ts_path.exists():
-        incomplete_timestamps = load_timestamps(inc_ts_path)
-        incomplete_timestamps = np.unique(incomplete_timestamps)
-    
-    final_res_files = None
-    final_res_outfile = None
-    final_res_datetime = None
-    res = []
-    
-    logging.info(f'Appending suitable tasks to dask...')
-    
-    # iterate only over larger intervals (in rainbow_to_h5 function it will be checked whether or not these will be appended to final dataset based on rain threshold)
-    for path_object in input_path.glob('*'):
-        if path_object.is_dir():
+                                    
+            logging.info('Check done.')
             
+            incomplete_timestamps = []
+
+            if inc_ts_path.exists():
+                incomplete_timestamps = load_timestamps(inc_ts_path)
+                incomplete_timestamps = np.unique(incomplete_timestamps)
+            
+            final_res_files = None
+            final_res_outfile = None
+            final_res_datetime = None
+            res = []
+            
+            logging.info(f'Appending suitable tasks to dask...')
+            
+            # iterate only over larger intervals (in rainbow_to_h5 function it will be checked whether or not these will be appended to final dataset based on rain threshold)      
             # initialize start and end datetimes
-            date_str = str(path_object)[-8:]
             start_datetime = dt.datetime.strptime(date_str, '%Y%m%d') + dt.timedelta(minutes=jump) - dt.timedelta(minutes=interval)
             end_datetime = dt.datetime.strptime(date_str, '%Y%m%d') + dt.timedelta(hours=24) - dt.timedelta(minutes=interval)
             
@@ -417,16 +453,28 @@ def main(conf, restarted):
                     final_res_outfile = [res_outfile[i] for i in idx]
                     final_res_datetimes_str = [temp_datetime.strftime(date_format) for temp_datetime in temp_datetimes]
                     res.append(dask.delayed(convert_rnbw_to_h5)(conf, final_res_files, final_res_outfile, final_res_datetimes_str, rain_threshold))
-    
-    logging.info(f'Append done.')
-    
-    logging.info(f"Creating {len(res)} dask tasks! {int(jump/interval)} observations per task.")
-    
-    with ProgressBar(minimum = 10, dt = 60):
-        scheduler = "processes" if conf.nworkers > 1 else "single-threaded"
-        res = dask.compute(*res, scheduler=scheduler)
-                
-    logging.info(f"All done!")
+            
+            logging.info('Append done.')
+            
+            logging.info(f"Creating {len(res)} dask tasks! {int(jump/interval)} observations per task.")
+            
+            with ProgressBar(minimum = 10, dt = 60):
+                scheduler = "processes" if conf.nworkers > 1 else "single-threaded"
+                res = dask.compute(*res, num_workers=conf.nworkers, scheduler=scheduler)
+            
+            # delete temporary radar files from temp_path 
+            rmtree(temp_path)
+            
+            # write date_str as complete day
+            com_days_path.touch()
+            with open(com_days_path, 'a') as f:
+                    f.write(date_str + ' ' + '\n')
+            
+            complete_days.append(date_str)
+            
+            logging.info(f'Done transforming data from {date_str}.')
+               
+    logging.info("Everything done!")
 
 
 if __name__ == '__main__':
