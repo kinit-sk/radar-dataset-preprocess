@@ -3,3 +3,13 @@
 **/full_output - Copy/*
 **/output/*
 test.ipynb
+*.out
+*.txt
+*.log
+
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints
+# Ignore Python bytecode files
+__pycache__/
+# Ignore compiled Python files
+*.pyc

@@ -1,7 +1,7 @@
 import numpy as np
 import numpy.ma as ma
 from pathlib import Path
-from addict import Dict
+from attridict import AttriDict as Dict
 import yaml
 import h5py
 import tarfile

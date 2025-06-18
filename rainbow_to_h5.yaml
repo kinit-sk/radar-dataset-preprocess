@@ -1,13 +1,12 @@
-input_path: C:\Users\marti\kinit\radar_tarfiles # path where tarballs with raw odim files are located
-temp_path: C:\Users\marti\kinit\radar-dataset-preprocess-02\temp_radars # path where to temporarily unpack tar files
-output_path: C:\Users\marti\kinit\radar-dataset-preprocess-02\vystup_test2 # path where to write output h5 files
-log_path: C:\Users\marti\kinit\radar-dataset-preprocess-02\vystup_test2 # path where to write logs
+input_path: /home/projects/p709-24-2/datasets/SHMU_Rainbow # path where tarballs with raw odim files are located
+output_path: /home/projects/p709-24-2/datasets/SHMU_4_New # path where to write output h5 files
+log_path: /home/ppavlik/repos/radar-dataset-preprocess/logs # path where to write logs
 radar_codes: ["kb", "kh", "mj", "sl"]
 products: ["dBZ", "dBZv", "KDP", "RhoHV", "W", "ZDR"] # product codes
 #products: ["dBZ", "dBZv", "KDP", "RhoHV", "V", "Vv", "W", "ZDR"] # product codes with velocity included
 rain_threshold: 
   rate: 0.05 # rainrate in mmh^(-1)/obs_interval - above this value = rainy, below = not rainy
-  fraction: 0.2 # criterion which we base on selection of rainy days - fraction of rainy pixels per image in [0,1] - keep images above, discard images below
+  fraction: 0.0 # criterion which we base on selection of rainy days - fraction of rainy pixels per image in [0,1] - keep images above, discard images below
 obs_interval: 5 # how many minutes is between observations
 check_rain_interval: 60 # check rain threshold each how many minutes?
-nworkers: 4 # no of workers for parallel processing
+nworkers: 16 # no of workers for parallel processing
